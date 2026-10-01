@@ -2,7 +2,7 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.utils import timezone
 
-from .models import EventTeam, Match, MatchEvent
+from .models import Event, EventTeam, Match, MatchEvent, Team
 
 
 @transaction.atomic
@@ -247,7 +247,84 @@ def validate_match_teams(
 
 
 def add_team_to_event(event_id, team_id):
+
     return EventTeam.objects.get_or_create(
         event_id=event_id,
         team_id=team_id,
     )
+
+def get_event_standings(event_id):
+    teams = Team.objects.filter(
+        event_teams__event_id=event_id
+    ).distinct()
+
+    standings = []
+
+    for team in teams:
+        matches = Match.objects.filter(
+            round__event_id=event_id,
+            status=Match.Status.FINISHED,
+        ).filter(
+            home_team=team
+        ) | Match.objects.filter(
+            round__event_id=event_id,
+            status=Match.Status.FINISHED,
+            away_team=team,
+        )
+
+        played = matches.count()
+
+        wins = 0
+        draws = 0
+        losses = 0
+        goals_for = 0
+        goals_against = 0
+
+        for match in matches:
+            if match.home_team_id == team.id:
+                goals_for += match.home_score
+                goals_against += match.away_score
+
+                if match.home_score > match.away_score:
+                    wins += 1
+                elif match.home_score == match.away_score:
+                    draws += 1
+                else:
+                    losses += 1
+            else:
+                goals_for += match.away_score
+                goals_against += match.home_score
+
+                if match.away_score > match.home_score:
+                    wins += 1
+                elif match.away_score == match.home_score:
+                    draws += 1
+                else:
+                    losses += 1
+
+        goal_difference = goals_for - goals_against
+        points = (wins * 3) + draws
+
+        standings.append({
+            "team_id": team.id,
+            "team": team.name,
+            "played": played,
+            "won": wins,
+            "drawn": draws,
+            "lost": losses,
+            "goals_for": goals_for,
+            "goals_against": goals_against,
+            "goal_difference": goal_difference,
+            "points": points,
+        })
+
+    standings.sort(
+        key=lambda row: (
+            -row["points"],
+            -row["goal_difference"],
+            -row["goals_for"],
+            row["team"],
+        )
+    )
+
+    return standings

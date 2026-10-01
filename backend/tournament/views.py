@@ -16,6 +16,7 @@ from .serializers import (
 )
 from .services import (
     finish_match,
+    get_event_standings,
     record_goal,
     record_match_event,
     start_match,
@@ -42,7 +43,17 @@ class EventViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = EventSerializer
     permission_classes = [AllowAny]
     pagination_class = StandardPagination
+    @action(
+        detail=True,
+        methods=["get"],
+        url_path="standings",
+    )
+    def standings(self, request, pk=None):
+        event = get_object_or_404(Event, pk=pk)
 
+        standings = get_event_standings(event.id)
+
+        return Response(standings)
 
 class TeamViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = Team.objects.all()
