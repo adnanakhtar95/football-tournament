@@ -118,3 +118,92 @@ class EventSerializer(serializers.ModelSerializer):
             ],
             many=True,
         ).data
+
+
+class AdminEventSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Event
+        fields = [
+            "id",
+            "name",
+            "description",
+            "start_date",
+            "end_date",
+            "status",
+        ]
+
+
+class AdminTeamSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Team
+        fields = [
+            "id",
+            "name",
+            "code",
+            "logo",
+        ]
+
+
+class AdminRoundSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Round
+        fields = [
+            "id",
+            "event",
+            "name",
+            "order_number",
+        ]
+
+
+class AdminMatchSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Match
+        fields = [
+            "id",
+            "round",
+            "home_team",
+            "away_team",
+            "scheduled_at",
+            "venue",
+            "status",
+        ]
+
+    def validate(self, attrs):
+      from .services import validate_match_teams
+
+      round_obj = attrs.get(
+        "round",
+        self.instance.round if self.instance else None,
+     )
+
+      home_team = attrs.get(
+        "home_team",
+        self.instance.home_team if self.instance else None,
+      )
+
+      away_team = attrs.get(
+        "away_team",
+        self.instance.away_team if self.instance else None,
+    )
+
+      if not round_obj or not home_team or not away_team:
+        raise serializers.ValidationError(
+            "Round and both teams are required."
+        )
+
+      validate_match_teams(
+        round_id=round_obj.id,
+        home_team_id=home_team.id,
+        away_team_id=away_team.id,
+        exclude_match_id=(
+            self.instance.id
+            if self.instance
+            else None
+        ),
+    )
+
+      return attrs
+
+
+class AdminEventTeamSerializer(serializers.Serializer):
+    team_id = serializers.IntegerField()  

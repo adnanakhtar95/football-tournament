@@ -7,8 +7,20 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import AllowAny, IsAdminUser
 from rest_framework.response import Response
 
-from .models import Event, Match, MatchEvent, Team
+from .models import (
+    Event,
+    EventTeam,
+    Match,
+    MatchEvent,
+    Round,
+    Team,
+)
 from .serializers import (
+    AdminEventSerializer,
+    AdminEventTeamSerializer,
+    AdminMatchSerializer,
+    AdminRoundSerializer,
+    AdminTeamSerializer,
     EventSerializer,
     MatchEventSerializer,
     MatchSerializer,
@@ -65,6 +77,87 @@ class TeamViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = TeamSerializer
     permission_classes = [AllowAny]
     pagination_class = StandardPagination
+
+class AdminEventViewSet(viewsets.ModelViewSet):
+    queryset = Event.objects.all()
+    serializer_class = AdminEventSerializer
+    permission_classes = [IsAdminUser]
+    pagination_class = StandardPagination
+
+
+class AdminTeamViewSet(viewsets.ModelViewSet):
+    queryset = Team.objects.all()
+    serializer_class = AdminTeamSerializer
+    permission_classes = [IsAdminUser]
+    pagination_class = StandardPagination
+
+
+class AdminRoundViewSet(viewsets.ModelViewSet):
+    queryset = Round.objects.select_related("event").all()
+    serializer_class = AdminRoundSerializer
+    permission_classes = [IsAdminUser]
+    pagination_class = StandardPagination
+
+
+class AdminMatchViewSet(viewsets.ModelViewSet):
+    queryset = (
+        Match.objects
+        .select_related(
+            "round__event",
+            "home_team",
+            "away_team",
+        )
+        .all()
+    )
+    serializer_class = AdminMatchSerializer
+    permission_classes = [IsAdminUser]
+    pagination_class = StandardPagination
+
+
+class AdminEventTeamViewSet(viewsets.ViewSet):
+    permission_classes = [IsAdminUser]
+
+    def create(self, request):
+        serializer = AdminEventTeamSerializer(
+            data=request.data
+        )
+        serializer.is_valid(raise_exception=True)
+
+        event_id = request.data.get("event_id")
+        team_id = serializer.validated_data["team_id"]
+
+        event = get_object_or_404(Event, pk=event_id)
+        team = get_object_or_404(Team, pk=team_id)
+
+        event_team, created = EventTeam.objects.get_or_create(
+            event=event,
+            team=team,
+        )
+
+        return Response(
+            {
+                "id": event_team.id,
+                "event_id": event.id,
+                "team_id": team.id,
+                "created": created,
+            },
+            status=(
+                status.HTTP_201_CREATED
+                if created
+                else status.HTTP_200_OK
+            ),
+        )
+
+    def destroy(self, request, pk=None):
+        event_team = get_object_or_404(
+            EventTeam,
+            pk=pk,
+        )
+        event_team.delete()
+
+        return Response(
+            status=status.HTTP_204_NO_CONTENT
+        )
 
 
 class MatchViewSet(viewsets.ReadOnlyModelViewSet):
