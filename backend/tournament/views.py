@@ -43,17 +43,22 @@ class EventViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = EventSerializer
     permission_classes = [AllowAny]
     pagination_class = StandardPagination
+
     @action(
         detail=True,
         methods=["get"],
         url_path="standings",
     )
     def standings(self, request, pk=None):
-        event = get_object_or_404(Event, pk=pk)
+        event = get_object_or_404(
+            Event,
+            pk=pk,
+        )
 
         standings = get_event_standings(event.id)
 
         return Response(standings)
+
 
 class TeamViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = Team.objects.all()
@@ -70,7 +75,9 @@ class MatchViewSet(viewsets.ReadOnlyModelViewSet):
             "home_team",
             "away_team",
         )
-        .prefetch_related("events__team")
+        .prefetch_related(
+            "events__team",
+        )
         .all()
     )
 
@@ -86,7 +93,10 @@ class MatchViewSet(viewsets.ReadOnlyModelViewSet):
     def start(self, request, pk=None):
         try:
             match = start_match(pk)
-        except (Match.DoesNotExist, DjangoValidationError) as exc:
+        except (
+            Match.DoesNotExist,
+            DjangoValidationError,
+        ) as exc:
             return Response(
                 {"detail": str(exc)},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -105,7 +115,10 @@ class MatchViewSet(viewsets.ReadOnlyModelViewSet):
     def finish(self, request, pk=None):
         try:
             match = finish_match(pk)
-        except (Match.DoesNotExist, DjangoValidationError) as exc:
+        except (
+            Match.DoesNotExist,
+            DjangoValidationError,
+        ) as exc:
             return Response(
                 {"detail": str(exc)},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -130,6 +143,48 @@ class MatchViewSet(viewsets.ReadOnlyModelViewSet):
                 player_name=request.data.get(
                     "player_name",
                     "",
+                ),
+                note=request.data.get(
+                    "note",
+                    "",
+                ),
+            )
+        except (
+            Match.DoesNotExist,
+            KeyError,
+            ValueError,
+            DjangoValidationError,
+        ) as exc:
+            return Response(
+                {"detail": str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return Response(
+            MatchEventSerializer(event).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        permission_classes=[IsAdminUser],
+        url_path="event",
+    )
+    def match_event(self, request, pk=None):
+        try:
+            event = record_match_event(
+                match_id=pk,
+                team_id=request.data["team_id"],
+                event_type=request.data["event_type"],
+                minute=request.data["minute"],
+                player_name=request.data.get(
+                    "player_name",
+                    "",
+                ),
+                points=request.data.get(
+                    "points",
+                    0,
                 ),
                 note=request.data.get(
                     "note",
@@ -180,7 +235,9 @@ class MatchViewSet(viewsets.ReadOnlyModelViewSet):
 class LiveMatchViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = (
         Match.objects
-        .filter(status=Match.Status.LIVE)
+        .filter(
+            status=Match.Status.LIVE,
+        )
         .select_related(
             "round__event",
             "home_team",
@@ -191,3 +248,4 @@ class LiveMatchViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = MatchSerializer
     permission_classes = [AllowAny]
     pagination_class = StandardPagination
+

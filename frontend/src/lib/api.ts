@@ -87,3 +87,29 @@ export async function getStandings(eventId: number): Promise<Standing[]> {
 
   return response.json();
 }
+
+export async function getMatches(): Promise<Match[]> {
+  const response = await fetch(`${API_BASE_URL}/matches/`, {
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    throw new Error("Failed to fetch matches");
+  }
+
+  const data: PaginatedResponse<Match> = await response.json();
+
+  return data.results;
+}
+
+export async function getMatch(id: number): Promise<Match> {
+  const response = await fetch(`${API_BASE_URL}/matches/${id}/`, {
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    throw new Error("Failed to fetch match");
+  }
+
+  return response.json();
+}

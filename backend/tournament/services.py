@@ -1,8 +1,8 @@
+from asgiref.sync import async_to_sync
+from channels.layers import get_channel_layer
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.utils import timezone
-from asgiref.sync import async_to_sync
-from channels.layers import get_channel_layer
 
 from .models import Event, EventTeam, Match, MatchEvent, Team
 
@@ -71,10 +71,13 @@ def start_match(match_id):
             "started_at",
         ]
     )
-    
+
     transaction.on_commit(
-    lambda: broadcast_match_update(match, "match_started")
-     )
+        lambda: broadcast_match_update(
+            match,
+            "match_started",
+        )
+    )
 
     return match
 
@@ -105,6 +108,13 @@ def finish_match(match_id):
             "status",
             "ended_at",
         ]
+    )
+
+    transaction.on_commit(
+        lambda: broadcast_match_update(
+            match,
+            "match_finished",
+        )
     )
 
     return match
@@ -167,6 +177,14 @@ def record_goal(
         ]
     )
 
+    transaction.on_commit(
+        lambda: broadcast_match_update(
+            match,
+            "goal_scored",
+            event,
+        )
+    )
+
     return event
 
 
@@ -216,7 +234,7 @@ def record_match_event(
             "Minute must be between 0 and 120."
         )
 
-    return MatchEvent.objects.create(
+    event = MatchEvent.objects.create(
         match=match,
         team_id=team_id,
         type=event_type,
@@ -225,6 +243,16 @@ def record_match_event(
         points=points,
         note=note,
     )
+
+    transaction.on_commit(
+        lambda: broadcast_match_update(
+            match,
+            "match_event",
+            event,
+        )
+    )
+
+    return event
 
 
 def validate_match_teams(
@@ -237,13 +265,11 @@ def validate_match_teams(
             "A team cannot play against itself."
         )
 
-    # Get the round so we can determine its event.
     from .models import Round
 
     round_obj = Round.objects.get(pk=round_id)
     event_id = round_obj.event_id
 
-    # Both teams must belong to the event.
     event_team_ids = set(
         EventTeam.objects.filter(
             event_id=event_id
@@ -263,7 +289,6 @@ def validate_match_teams(
             "Away team is not registered for this event."
         )
 
-    # A team cannot play twice in the same round.
     existing_matches = Match.objects.filter(
         round_id=round_id
     ).filter(
@@ -285,16 +310,18 @@ def validate_match_teams(
 
 
 def add_team_to_event(event_id, team_id):
-
     return EventTeam.objects.get_or_create(
         event_id=event_id,
         team_id=team_id,
     )
 
+
 def get_event_standings(event_id):
-    teams = Team.objects.filter(
-        event_teams__event_id=event_id
-    ).distinct()
+    teams = (
+        Team.objects
+        .filter(event_teams__event_id=event_id)
+        .distinct()
+    )
 
     standings = []
 
@@ -329,6 +356,7 @@ def get_event_standings(event_id):
                     draws += 1
                 else:
                     losses += 1
+
             else:
                 goals_for += match.away_score
                 goals_against += match.home_score
@@ -340,8 +368,19 @@ def get_event_standings(event_id):
                 else:
                     losses += 1
 
+        reward_points = MatchEvent.objects.filter(
+            match__in=matches,
+            team_id=team.id,
+            type=MatchEvent.EventType.REWARD,
+        ).values_list(
+            "points",
+            flat=True,
+        )
+
+        reward_total = sum(reward_points)
+
         goal_difference = goals_for - goals_against
-        points = (wins * 3) + draws
+        points = (wins * 3) + draws + reward_total
 
         standings.append({
             "team_id": team.id,
@@ -353,6 +392,7 @@ def get_event_standings(event_id):
             "goals_for": goals_for,
             "goals_against": goals_against,
             "goal_difference": goal_difference,
+            "reward_points": reward_total,
             "points": points,
         })
 
