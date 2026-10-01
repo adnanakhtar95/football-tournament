@@ -11,7 +11,12 @@ from .views import (
     LiveMatchViewSet,
     MatchViewSet,
     TeamViewSet,
+    csrf_view,
+    login_view,
 )
+
+
+path("auth/csrf/", csrf_view, name="csrf"),
 
 router = DefaultRouter()
 
@@ -42,7 +47,17 @@ router.register(
     AdminMatchViewSet,
     basename="admin-match",
 )
+router.register(
+    "admin/event-teams",
+    AdminEventTeamViewSet,
+    basename="admin-event-team",
+)
 
+# urlpatterns = [
+#     path("", include(router.urls)),
+# ]
 urlpatterns = [
+    path("auth/login/", login_view, name="login"),
+     path("auth/csrf/", csrf_view, name="csrf"),
     path("", include(router.urls)),
 ]

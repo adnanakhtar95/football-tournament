@@ -6,6 +6,11 @@ from rest_framework.decorators import action
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import AllowAny, IsAdminUser
 from rest_framework.response import Response
+from django.contrib.auth import authenticate, login
+from django.views.decorators.csrf import ensure_csrf_cookie
+
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny
 
 from .models import (
     Event,
@@ -116,6 +121,30 @@ class AdminMatchViewSet(viewsets.ModelViewSet):
 
 class AdminEventTeamViewSet(viewsets.ViewSet):
     permission_classes = [IsAdminUser]
+
+    def list(self, request):
+        event_id = request.query_params.get("event_id")
+
+        queryset = EventTeam.objects.select_related("team", "event")
+
+        if event_id:
+            queryset = queryset.filter(event_id=event_id)
+
+        return Response([
+            {
+                "id": event_team.id,
+                "event_id": event_team.event_id,
+                "team_id": event_team.team_id,
+                "team": {
+                    "id": event_team.team.id,
+                    "name": event_team.team.name,
+                    "code": event_team.team.code,
+                    "logo": event_team.team.logo,
+                },
+            }
+            for event_team in queryset
+        ])
+
 
     def create(self, request):
         serializer = AdminEventTeamSerializer(
@@ -342,3 +371,39 @@ class LiveMatchViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [AllowAny]
     pagination_class = StandardPagination
 
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def login_view(request):
+    username = request.data.get("username")
+    password = request.data.get("password")
+
+    user = authenticate(username=username, password=password)
+
+    if user is None:
+        return Response(
+            {"detail": "Invalid username or password."},
+            status=status.HTTP_401_UNAUTHORIZED,
+        )
+
+    if not user.is_staff:
+        return Response(
+            {"detail": "Admin access required."},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    login(request, user)
+
+    return Response({
+        "detail": "Login successful.",
+        "user": {
+            "id": user.id,
+            "username": user.username,
+            "is_staff": user.is_staff,
+        },
+    })
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+@ensure_csrf_cookie
+def csrf_view(request):
+    return Response({"detail": "CSRF cookie set."})

@@ -44,7 +44,7 @@ interface PaginatedResponse<T> {
 }
 
 const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000/api";
+  process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
 
 export async function getEvents(): Promise<Event[]> {
   const response = await fetch(`${API_BASE_URL}/events/`, {
@@ -112,4 +112,25 @@ export async function getMatch(id: number): Promise<Match> {
   }
 
   return response.json();
+}
+
+export async function getCsrfToken() {
+  await fetch(`${API_BASE_URL}/auth/csrf/`, {
+    method: "GET",
+    credentials: "include",
+  });
+}
+
+function getCookie(name: string): string | null {
+  const cookies = document.cookie.split(";");
+
+  for (const cookie of cookies) {
+    const [key, ...value] = cookie.trim().split("=");
+
+    if (key === name) {
+      return decodeURIComponent(value.join("="));
+    }
+  }
+
+  return null;
 }

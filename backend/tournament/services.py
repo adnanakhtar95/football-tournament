@@ -259,11 +259,14 @@ def validate_match_teams(
     round_id,
     home_team_id,
     away_team_id,
+    exclude_match_id=None,
 ):
     if home_team_id == away_team_id:
         raise ValidationError(
             "A team cannot play against itself."
         )
+
+    from django.db.models import Q
 
     from .models import Round
 
@@ -271,12 +274,9 @@ def validate_match_teams(
     event_id = round_obj.event_id
 
     event_team_ids = set(
-        EventTeam.objects.filter(
-            event_id=event_id
-        ).values_list(
-            "team_id",
-            flat=True,
-        )
+        EventTeam.objects
+        .filter(event_id=event_id)
+        .values_list("team_id", flat=True)
     )
 
     if home_team_id not in event_team_ids:
@@ -289,25 +289,24 @@ def validate_match_teams(
             "Away team is not registered for this event."
         )
 
-    existing_matches = Match.objects.filter(
-        round_id=round_id
-    ).filter(
-        home_team_id__in=[
-            home_team_id,
-            away_team_id,
-        ]
-    ).filter(
-        away_team_id__in=[
-            home_team_id,
-            away_team_id,
-        ]
+    existing_matches = (
+        Match.objects
+        .filter(round_id=round_id)
+        .filter(
+            Q(home_team_id__in=[home_team_id, away_team_id])
+            | Q(away_team_id__in=[home_team_id, away_team_id])
+        )
     )
+
+    if exclude_match_id is not None: 
+        existing_matches = existing_matches.exclude(
+            pk=exclude_match_id
+        )
 
     if existing_matches.exists():
         raise ValidationError(
             "One of these teams already has a match in this round."
         )
-
 
 def add_team_to_event(event_id, team_id):
     return EventTeam.objects.get_or_create(

@@ -159,13 +159,17 @@ class AdminMatchSerializer(serializers.ModelSerializer):
     class Meta:
         model = Match
         fields = [
-            "id",
-            "round",
-            "home_team",
-            "away_team",
-            "scheduled_at",
-            "venue",
-            "status",
+             "id",
+    "round",
+    "home_team",
+    "away_team",
+    "scheduled_at",
+    "venue",
+    "status",
+    "started_at",
+    "ended_at",
+    "home_score",
+    "away_score",
         ]
 
     def validate(self, attrs):
