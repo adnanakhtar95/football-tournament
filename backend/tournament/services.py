@@ -1,8 +1,42 @@
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.utils import timezone
+from asgiref.sync import async_to_sync
+from channels.layers import get_channel_layer
 
 from .models import Event, EventTeam, Match, MatchEvent, Team
+
+
+def broadcast_match_update(match, event_type, event=None):
+    channel_layer = get_channel_layer()
+
+    data = {
+        "type": "match_update",
+        "event": event_type,
+        "match_id": match.id,
+        "status": match.status,
+        "home_score": match.home_score,
+        "away_score": match.away_score,
+    }
+
+    if event is not None:
+        data["match_event"] = {
+            "id": event.id,
+            "type": event.type,
+            "team_id": event.team_id,
+            "player_name": event.player_name,
+            "minute": event.minute,
+            "points": event.points,
+            "note": event.note,
+        }
+
+    async_to_sync(channel_layer.group_send)(
+        f"match_{match.id}",
+        {
+            "type": "match_update",
+            "data": data,
+        },
+    )
 
 
 @transaction.atomic
@@ -37,6 +71,10 @@ def start_match(match_id):
             "started_at",
         ]
     )
+    
+    transaction.on_commit(
+    lambda: broadcast_match_update(match, "match_started")
+     )
 
     return match
 
