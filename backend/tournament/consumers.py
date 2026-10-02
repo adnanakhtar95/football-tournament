@@ -1,3 +1,4 @@
+
 import json
 
 from channels.generic.websocket import AsyncWebsocketConsumer
@@ -33,7 +34,37 @@ class MatchConsumer(AsyncWebsocketConsumer):
 
     async def match_update(self, event):
         await self.send(
+            text_data=json.dumps(event["data"])
+        )
+
+
+class LiveScoreboardConsumer(AsyncWebsocketConsumer):
+    async def connect(self):
+        self.room_group_name = "live_scoreboard"
+
+        await self.channel_layer.group_add(
+            self.room_group_name,
+            self.channel_name,
+        )
+
+        await self.accept()
+
+        await self.send(
             text_data=json.dumps(
-                event["data"]
+                {
+                    "type": "connection",
+                    "message": "Connected to global live scoreboard.",
+                }
             )
+        )
+
+    async def disconnect(self, close_code):
+        await self.channel_layer.group_discard(
+            self.room_group_name,
+            self.channel_name,
+        )
+
+    async def scoreboard_update(self, event):
+        await self.send(
+            text_data=json.dumps(event["data"])
         )

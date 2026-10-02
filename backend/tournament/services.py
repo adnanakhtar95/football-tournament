@@ -7,6 +7,7 @@ from django.utils import timezone
 from .models import Event, EventTeam, Match, MatchEvent, Team
 
 
+
 def broadcast_match_update(match, event_type, event=None):
     channel_layer = get_channel_layer()
 
@@ -30,6 +31,7 @@ def broadcast_match_update(match, event_type, event=None):
             "note": event.note,
         }
 
+    # 1. Broadcast to spectators watching this specific match.
     async_to_sync(channel_layer.group_send)(
         f"match_{match.id}",
         {
@@ -38,6 +40,14 @@ def broadcast_match_update(match, event_type, event=None):
         },
     )
 
+    # 2. Broadcast to everyone watching the global live scoreboard.
+    async_to_sync(channel_layer.group_send)(
+        "live_scoreboard",
+        {
+            "type": "scoreboard_update",
+            "data": data,
+        },
+    )
 
 @transaction.atomic
 def start_match(match_id):

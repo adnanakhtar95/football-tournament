@@ -2,12 +2,15 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
 
-const WS_BASE_URL = API_BASE_URL.replace(/^http/, "ws").replace(/\/api\/?$/, "");
+const WS_BASE_URL = API_BASE_URL
+  .replace(/^http/, "ws")
+  .replace(/\/api\/?$/, "")
+  .replace(/\/$/, "");
 
 interface Team {
   id: number;
@@ -30,6 +33,7 @@ interface LiveMatch {
 
 interface MatchUpdate {
   type: string;
+  event?: string;
   match_id?: number;
   status?: LiveMatch["status"];
   home_score?: number;
@@ -37,34 +41,28 @@ interface MatchUpdate {
 }
 
 function getTeamName(team: number | Team): string {
-  if (typeof team === "number") {
-    return `Team #${team}`;
-  }
-
-  return team.name;
+  return typeof team === "number" ? `Team #${team}` : team.name;
 }
 
 function getTeamCode(team: number | Team): string {
-  if (typeof team === "number") {
-    return "";
-  }
-
-  return team.code;
+  return typeof team === "number" ? "" : team.code;
 }
 
 export default function LiveScoreboardPage() {
   const [matches, setMatches] = useState<LiveMatch[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [connectedMatches, setConnectedMatches] = useState<number[]>([]);
+  const [socketConnected, setSocketConnected] = useState(false);
+
+  const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
 
   const loadMatches = useCallback(async (showLoading = false) => {
     try {
       if (showLoading) {
         setLoading(true);
       }
-
-      setError("");
 
       const response = await fetch(`${API_BASE_URL}/live/`, {
         cache: "no-store",
@@ -83,6 +81,7 @@ export default function LiveScoreboardPage() {
         : data.results ?? [];
 
       setMatches(results.filter((match) => match.status === "live"));
+      setError("");
     } catch (err) {
       setError(
         err instanceof Error
@@ -95,37 +94,28 @@ export default function LiveScoreboardPage() {
   }, []);
 
   useEffect(() => {
-    void loadMatches(true);
-  }, [loadMatches]);
+    let active = true;
+    let socket: WebSocket | null = null;
 
-  const matchIds = matches
-    .map((match) => match.id)
-    .sort((a, b) => a - b)
-    .join(",");
+    const connect = () => {
+      if (!active) {
+        return;
+      }
 
-  useEffect(() => {
-    if (!matchIds) {
-      setConnectedMatches([]);
-      return;
-    }
-
-    const sockets: WebSocket[] = [];
-    const ids = matchIds.split(",").map(Number);
-
-    ids.forEach((matchId) => {
-      const socket = new WebSocket(
-        `${WS_BASE_URL}/ws/matches/${matchId}/`
-      );
+      socket = new WebSocket(`${WS_BASE_URL}/ws/live/`);
 
       socket.onopen = () => {
-        setConnectedMatches((current) =>
-          current.includes(matchId)
-            ? current
-            : [...current, matchId]
-        );
+        if (!active) return;
+
+        setSocketConnected(true);
+
+        // Synchronize after reconnecting in case any events were missed.
+        void loadMatches();
       };
 
       socket.onmessage = (message) => {
+        if (!active) return;
+
         try {
           const data: MatchUpdate = JSON.parse(message.data);
 
@@ -133,7 +123,23 @@ export default function LiveScoreboardPage() {
             return;
           }
 
-          if (data.status === "finished") {
+          if (data.type !== "match_update") {
+            return;
+          }
+
+          if (data.event === "match_started") {
+            // Fetch the complete match, including team names and venue.
+            void loadMatches();
+            return;
+          }
+
+          if (data.match_id === undefined) {
+            return;
+          }
+
+          const matchId = data.match_id;
+
+          if (data.event === "match_finished" || data.status === "finished") {
             setMatches((current) =>
               current.filter((match) => match.id !== matchId)
             );
@@ -156,29 +162,43 @@ export default function LiveScoreboardPage() {
             })
           );
         } catch (err) {
-          console.error("Invalid match WebSocket update:", err);
+          console.error("Invalid scoreboard WebSocket update:", err);
+        }
+      };
+
+      socket.onerror = () => {
+        if (active) {
+          setSocketConnected(false);
         }
       };
 
       socket.onclose = () => {
-        setConnectedMatches((current) =>
-          current.filter((id) => id !== matchId)
-        );
-      };
+        if (!active) return;
 
-      socket.onerror = () => {
-        setConnectedMatches((current) =>
-          current.filter((id) => id !== matchId)
-        );
-      };
+        setSocketConnected(false);
 
-      sockets.push(socket);
-    });
+        // Reconnect after three seconds.
+        reconnectTimer.current = setTimeout(connect, 3000);
+      };
+    };
+
+    connect();
 
     return () => {
-      sockets.forEach((socket) => socket.close());
+      active = false;
+
+      if (reconnectTimer.current !== null) {
+        clearTimeout(reconnectTimer.current);
+      }
+
+      socket?.close();
     };
-  }, [matchIds]);
+  }, [loadMatches]);
+
+  const totalGoals = matches.reduce(
+    (total, match) => total + match.home_score + match.away_score,
+    0
+  );
 
   return (
     <main className="min-h-screen bg-slate-950 text-white">
@@ -209,9 +229,22 @@ export default function LiveScoreboardPage() {
             </div>
 
             <div className="flex items-center gap-3">
-              <span className="flex items-center gap-2 rounded-full border border-red-900 bg-red-950/40 px-4 py-2 text-sm font-semibold text-red-400">
-                <span className="h-2 w-2 animate-pulse rounded-full bg-red-500" />
-                LIVE
+              <span
+                className={`flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-semibold ${
+                  socketConnected
+                    ? "border-green-900 bg-green-950/40 text-green-400"
+                    : "border-slate-700 bg-slate-900 text-slate-400"
+                }`}
+              >
+                <span
+                  className={`h-2 w-2 rounded-full ${
+                    socketConnected
+                      ? "bg-green-500"
+                      : "animate-pulse bg-yellow-500"
+                  }`}
+                />
+
+                {socketConnected ? "Realtime Connected" : "Connecting..."}
               </span>
 
               <button
@@ -232,7 +265,7 @@ export default function LiveScoreboardPage() {
           <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
             <p className="text-sm text-slate-400">Live Matches</p>
 
-            <p className="mt-3 text-4xl font-bold text-white">
+            <p className="mt-3 text-4xl font-bold">
               {matches.length}
             </p>
           </div>
@@ -241,11 +274,7 @@ export default function LiveScoreboardPage() {
             <p className="text-sm text-slate-400">Goals Scored</p>
 
             <p className="mt-3 text-4xl font-bold text-blue-400">
-              {matches.reduce(
-                (total, match) =>
-                  total + match.home_score + match.away_score,
-                0
-              )}
+              {totalGoals}
             </p>
 
             <p className="mt-2 text-xs text-slate-500">
@@ -254,14 +283,18 @@ export default function LiveScoreboardPage() {
           </div>
 
           <div className="rounded-2xl border border-slate-800 bg-slate-900 p-6">
-            <p className="text-sm text-slate-400">Realtime Connections</p>
+            <p className="text-sm text-slate-400">Realtime Connection</p>
 
-            <p className="mt-3 text-4xl font-bold text-green-400">
-              {connectedMatches.length}
+            <p
+              className={`mt-3 text-2xl font-bold ${
+                socketConnected ? "text-green-400" : "text-yellow-400"
+              }`}
+            >
+              {socketConnected ? "Connected" : "Disconnected"}
             </p>
 
             <p className="mt-2 text-xs text-slate-500">
-              Active match WebSockets
+              Global scoreboard WebSocket
             </p>
           </div>
         </section>
@@ -296,7 +329,7 @@ export default function LiveScoreboardPage() {
 
             <p className="mx-auto mt-3 max-w-md text-slate-400">
               There are currently no matches in progress.
-              Once a match starts, refresh this page to join its live updates.
+              New matches will automatically appear here when they start.
             </p>
 
             <Link
@@ -321,112 +354,110 @@ export default function LiveScoreboardPage() {
             </div>
 
             <div className="grid gap-5 lg:grid-cols-2">
-              {matches.map((match) => {
-                const isConnected = connectedMatches.includes(match.id);
+              {matches.map((match) => (
+                <article
+                  key={match.id}
+                  className="overflow-hidden rounded-3xl border border-slate-800 bg-slate-900 transition hover:border-slate-600"
+                >
+                  {/* Card heading */}
 
-                return (
-                  <article
-                    key={match.id}
-                    className="overflow-hidden rounded-3xl border border-slate-800 bg-slate-900 transition hover:border-slate-600"
-                  >
-                    {/* Card heading */}
+                  <div className="flex items-center justify-between border-b border-slate-800 px-6 py-4">
+                    <div className="flex items-center gap-3">
+                      <span className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-red-400">
+                        <span className="h-2 w-2 animate-pulse rounded-full bg-red-500" />
+                        Live
+                      </span>
 
-                    <div className="flex items-center justify-between border-b border-slate-800 px-6 py-4">
-                      <div className="flex items-center gap-3">
-                        <span className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-red-400">
-                          <span className="h-2 w-2 animate-pulse rounded-full bg-red-500" />
-                          Live
-                        </span>
-
-                        <span className="text-xs text-slate-500">
-                          Match #{match.id}
-                        </span>
-                      </div>
-
-                      <span
-                        className={`text-xs font-medium ${
-                          isConnected
-                            ? "text-green-400"
-                            : "text-slate-500"
-                        }`}
-                      >
-                        {isConnected
-                          ? "● Realtime Connected"
-                          : "○ Connecting"}
+                      <span className="text-xs text-slate-500">
+                        Match #{match.id}
                       </span>
                     </div>
 
-                    {/* Scoreboard */}
+                    <span
+                      className={`text-xs font-medium ${
+                        socketConnected
+                          ? "text-green-400"
+                          : "text-slate-500"
+                      }`}
+                    >
+                      {socketConnected
+                        ? "● Realtime Connected"
+                        : "○ Reconnecting"}
+                    </span>
+                  </div>
 
-                    <div className="px-6 py-9">
-                      <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-4">
-                        {/* Home */}
+                  {/* Scoreboard */}
 
-                        <div className="min-w-0 text-center">
-                          <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-slate-700 bg-slate-800 text-xl font-bold text-blue-400">
-                            {getTeamCode(match.home_team).slice(0, 2) ||
-                              "H"}
-                          </div>
+                  <div className="px-6 py-9">
+                    <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-4">
+                      {/* Home team */}
 
-                          <h3 className="break-words text-sm font-semibold sm:text-lg">
-                            {getTeamName(match.home_team)}
-                          </h3>
-
-                          <p className="mt-1 text-xs text-slate-500">
-                            HOME
-                          </p>
+                      <div className="min-w-0 text-center">
+                        <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-slate-700 bg-slate-800 text-xl font-bold text-blue-400">
+                          {getTeamCode(match.home_team).slice(0, 2) || "H"}
                         </div>
 
-                        {/* Score */}
+                        <h3 className="break-words text-sm font-semibold sm:text-lg">
+                          {getTeamName(match.home_team)}
+                        </h3>
 
-                        <div className="text-center">
-                          <p className="whitespace-nowrap text-4xl font-extrabold tracking-tight sm:text-5xl">
-                            {match.home_score}
-                            <span className="mx-3 text-slate-600">:</span>
-                            {match.away_score}
-                          </p>
+                        <p className="mt-1 text-xs text-slate-500">
+                          HOME
+                        </p>
+                      </div>
 
-                          <span className="mt-4 inline-block rounded-full bg-red-950 px-3 py-1 text-xs font-bold uppercase text-red-400">
-                            In Progress
+                      {/* Score */}
+
+                      <div className="text-center">
+                        <p className="whitespace-nowrap text-4xl font-extrabold tracking-tight sm:text-5xl">
+                          {match.home_score}
+
+                          <span className="mx-3 text-slate-600">
+                            :
                           </span>
+
+                          {match.away_score}
+                        </p>
+
+                        <span className="mt-4 inline-block rounded-full bg-red-950 px-3 py-1 text-xs font-bold uppercase text-red-400">
+                          In Progress
+                        </span>
+                      </div>
+
+                      {/* Away team */}
+
+                      <div className="min-w-0 text-center">
+                        <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-slate-700 bg-slate-800 text-xl font-bold text-blue-400">
+                          {getTeamCode(match.away_team).slice(0, 2) || "A"}
                         </div>
 
-                        {/* Away */}
+                        <h3 className="break-words text-sm font-semibold sm:text-lg">
+                          {getTeamName(match.away_team)}
+                        </h3>
 
-                        <div className="min-w-0 text-center">
-                          <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-slate-700 bg-slate-800 text-xl font-bold text-blue-400">
-                            {getTeamCode(match.away_team).slice(0, 2) ||
-                              "A"}
-                          </div>
-
-                          <h3 className="break-words text-sm font-semibold sm:text-lg">
-                            {getTeamName(match.away_team)}
-                          </h3>
-
-                          <p className="mt-1 text-xs text-slate-500">
-                            AWAY
-                          </p>
-                        </div>
+                        <p className="mt-1 text-xs text-slate-500">
+                          AWAY
+                        </p>
                       </div>
                     </div>
+                  </div>
 
-                    {/* Footer */}
+                  {/* Footer */}
 
-                    <div className="flex flex-wrap items-center justify-between gap-4 border-t border-slate-800 bg-slate-950/40 px-6 py-4">
-                      <p className="text-xs text-slate-500">
-                        📍 {match.venue || "Venue not specified"}
-                      </p>
+                  <div className="flex flex-wrap items-center justify-between gap-4 border-t border-slate-800 bg-slate-950/40 px-6 py-4">
+                    <p className="text-xs text-slate-500">
+                      📍 {match.venue || "Venue not specified"}
+                    </p>
 
-                      <Link
-                        href={`/matches/${match.id}`}
-                        className="rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold transition hover:bg-blue-500"
-                      >
-                        View Match →
-                      </Link>
-                    </div>
-                  </article>
-                );
-              })}
+                    <Link
+                      href={`/matches/${match.id}`}
+                      className="rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold transition hover:bg-blue-500"
+                    >
+                      View Match →
+                    </Link>
+                  </div>
+                </article>
+              ))}
             </div>
           </section>
         )}
