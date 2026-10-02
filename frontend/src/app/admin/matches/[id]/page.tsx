@@ -71,13 +71,49 @@ async function getCsrfToken(): Promise<string> {
     throw new Error("Unable to initialize CSRF protection.");
   }
 
-  const match = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
+  const csrfMatch = document.cookie.match(
+    /(?:^|;\s*)csrftoken=([^;]+)/
+  );
 
-  if (!match) {
+  if (!csrfMatch) {
     throw new Error("CSRF token was not found.");
   }
 
-  return decodeURIComponent(match[1]);
+  return decodeURIComponent(csrfMatch[1]);
+}
+
+function eventLabel(type: MatchEvent["type"]) {
+  switch (type) {
+    case "goal":
+      return "Goal";
+    case "yellow_card":
+      return "Yellow Card";
+    case "red_card":
+      return "Red Card";
+    case "penalty_kick":
+      return "Penalty Kick";
+    case "reward":
+      return "Reward";
+    default:
+      return type;
+  }
+}
+
+function eventIcon(type: MatchEvent["type"]) {
+  switch (type) {
+    case "goal":
+      return "⚽";
+    case "yellow_card":
+      return "🟨";
+    case "red_card":
+      return "🟥";
+    case "penalty_kick":
+      return "🎯";
+    case "reward":
+      return "🏆";
+    default:
+      return "•";
+  }
 }
 
 export default function MatchControlPage() {
@@ -93,6 +129,7 @@ export default function MatchControlPage() {
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
   const [error, setError] = useState("");
+  const [socketConnected, setSocketConnected] = useState(false);
 
   const [goalTeam, setGoalTeam] = useState("");
   const [goalPlayer, setGoalPlayer] = useState("");
@@ -106,8 +143,6 @@ export default function MatchControlPage() {
   const [eventMinute, setEventMinute] = useState("");
   const [eventPoints, setEventPoints] = useState("");
   const [eventNote, setEventNote] = useState("");
-
-  const [socketConnected, setSocketConnected] = useState(false);
 
   async function loadMatch() {
     const response = await fetch(
@@ -190,92 +225,99 @@ export default function MatchControlPage() {
     }
   }
 
-//   useEffect(() => {
-//     refresh();
-//   }, [matchId]);
- useEffect(() => {
-  refresh();
+  useEffect(() => {
+    refresh();
 
-  const socket = new WebSocket(
-    `ws://localhost:8000/ws/matches/${matchId}/`
-  );
+    const socket = new WebSocket(
+      `ws://localhost:8000/ws/matches/${matchId}/`
+    );
 
-  socket.onopen = () => {
-    setSocketConnected(true);
-    console.log("WebSocket connected");
-  };
+    socket.onopen = () => {
+      setSocketConnected(true);
+      console.log("Admin match WebSocket connected");
+    };
 
-  socket.onmessage = (message) => {
-    try {
-      const data = JSON.parse(message.data);
+    socket.onmessage = (message) => {
+      try {
+        const data = JSON.parse(message.data);
 
-      console.log("WebSocket update:", data);
+        console.log("WebSocket update:", data);
 
-      if (data.type === "connection") {
-        return;
-      }
-
-      setMatch((currentMatch) => {
-        if (!currentMatch) {
-          return currentMatch;
+        if (data.type === "connection") {
+          return;
         }
 
-        return {
-          ...currentMatch,
-          status: data.status,
-          home_score: data.home_score,
-          away_score: data.away_score,
-        };
-      });
-
-      if (data.match_event) {
-        setEvents((currentEvents) => {
-          const alreadyExists = currentEvents.some(
-            (event) => event.id === data.match_event.id
-          );
-
-          if (alreadyExists) {
-            return currentEvents;
+        setMatch((currentMatch) => {
+          if (!currentMatch) {
+            return currentMatch;
           }
 
-          return [
-            ...currentEvents,
-            {
-              id: data.match_event.id,
-              team: data.match_event.team_id,
-              type: data.match_event.type,
-              player_name: data.match_event.player_name,
-              minute: data.match_event.minute,
-              points: data.match_event.points,
-              note: data.match_event.note,
-              created_at: new Date().toISOString(),
-            },
-          ];
+          return {
+            ...currentMatch,
+            status: data.status,
+            home_score: data.home_score,
+            away_score: data.away_score,
+          };
         });
+
+        if (data.match_event) {
+          setEvents((currentEvents) => {
+            const alreadyExists = currentEvents.some(
+              (event) => event.id === data.match_event.id
+            );
+
+            if (alreadyExists) {
+              return currentEvents;
+            }
+
+            return [
+              ...currentEvents,
+              {
+                id: data.match_event.id,
+                team: data.match_event.team_id,
+                type: data.match_event.type,
+                player_name: data.match_event.player_name,
+                minute: data.match_event.minute,
+                points: data.match_event.points,
+                note: data.match_event.note,
+                created_at: new Date().toISOString(),
+              },
+            ];
+          });
+        }
+      } catch (err) {
+        console.error("Invalid WebSocket message:", err);
       }
-    } catch (err) {
-      console.error("Invalid WebSocket message:", err);
-    }
-  };
+    };
 
-  socket.onclose = () => {
-    setSocketConnected(false);
-    console.log("WebSocket disconnected");
-  };
+    socket.onclose = () => {
+      setSocketConnected(false);
+      console.log("Admin match WebSocket disconnected");
+    };
 
-  socket.onerror = (error) => {
-    setSocketConnected(false);
-  };
+    socket.onerror = () => {
+      setSocketConnected(false);
+    };
 
-  return () => {
-    socket.close();
-  };
-}, [matchId]);  
+    return () => {
+      socket.close();
+    };
+  }, [matchId]);
 
   function teamName(teamId: number) {
-    const team = eventTeams.find((item) => item.team_id === teamId);
+    const team = eventTeams.find(
+      (item) => item.team_id === teamId
+    );
 
     return team?.team?.name || `Team #${teamId}`;
+  }
+
+  function teamCode(teamId: number) {
+    const team = eventTeams.find(
+      (item) => item.team_id === teamId
+    );
+
+    return team?.team?.code || "";
   }
 
   async function performAction(
@@ -354,7 +396,7 @@ export default function MatchControlPage() {
 
     const body: Record<string, unknown> = {
       team_id: Number(eventTeam),
-      type: eventType,
+      event_type: eventType,
       minute: Number(eventMinute),
       player_name: eventPlayer,
       note: eventNote,
@@ -374,17 +416,37 @@ export default function MatchControlPage() {
 
   if (loading) {
     return (
-      <main style={{ padding: 40 }}>
-        <p>Loading match...</p>
+      <main className="min-h-screen bg-slate-950 text-white">
+        <div className="mx-auto max-w-6xl px-6 py-10">
+          <p className="text-slate-400">
+            Loading match control...
+          </p>
+        </div>
       </main>
     );
   }
 
   if (!match) {
     return (
-      <main style={{ padding: 40 }}>
-        <h1>Match Control</h1>
-        <p>{error || "Match not found."}</p>
+      <main className="min-h-screen bg-slate-950 text-white">
+        <div className="mx-auto max-w-6xl px-6 py-10">
+          <button
+            onClick={() => router.push("/admin/matches")}
+            className="text-sm text-blue-400 hover:text-blue-300"
+          >
+            ← Back to Matches
+          </button>
+
+          <div className="mt-8 rounded-3xl border border-red-900 bg-slate-900 p-8">
+            <h1 className="text-2xl font-bold">
+              Match Control
+            </h1>
+
+            <p className="mt-3 text-red-300">
+              {error || "Match not found."}
+            </p>
+          </div>
+        </div>
       </main>
     );
   }
@@ -397,338 +459,380 @@ export default function MatchControlPage() {
   const canFinish = match.status === "live";
 
   return (
-    <main
-      style={{
-        maxWidth: 1100,
-        margin: "0 auto",
-        padding: 40,
-      }}
-    >
-      <button
-        onClick={() => router.push("/admin/matches")}
-        style={{
-          marginBottom: 20,
-          padding: "8px 14px",
-          cursor: "pointer",
-        }}
-      >
-        ← Back to Matches
-      </button>
-
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          gap: 20,
-          marginBottom: 30,
-        }}
-      >
-        <div>
-          <h1 style={{ marginBottom: 8 }}>Match Control</h1>
-          <p style={{ margin: 0 }}>
-            {homeTeam} vs {awayTeam}
-          </p>
-        </div>
-
-        <strong
-          style={{
-            padding: "8px 14px",
-            borderRadius: 8,
-            border: "1px solid #ccc",
-          }}
+    <main className="min-h-screen bg-slate-950 text-white">
+      <div className="mx-auto max-w-6xl px-6 py-10">
+        <button
+          onClick={() => router.push("/admin/matches")}
+          className="mb-8 text-sm text-blue-400 hover:text-blue-300"
         >
-          {match.status.toUpperCase()}
-        </strong>
-      </div>
+          ← Back to Matches
+        </button>
 
-      {error && (
-        <div
-          style={{
-            padding: 14,
-            marginBottom: 20,
-            border: "1px solid #dc2626",
-            borderRadius: 8,
-            background: "#fef2f2",
-            color: "#991b1b",
-          }}
-        >
-          {error}
-        </div>
-      )}
-
-      {/* SCOREBOARD */}
-
-      <section
-        style={{
-          border: "1px solid #ddd",
-          borderRadius: 12,
-          padding: 30,
-          marginBottom: 30,
-          textAlign: "center",
-        }}
-      >
-        <h2 style={{ marginBottom: 20 }}>Scoreboard</h2>
-
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "center",
-            alignItems: "center",
-            gap: 35,
-            fontSize: 28,
-            fontWeight: 700,
-          }}
-        >
-          <span>{homeTeam}</span>
-
-          <span>
-            {match.home_score} - {match.away_score}
-          </span>
-
-          <span>{awayTeam}</span>
-        </div>
-
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "center",
-            gap: 12,
-            marginTop: 25,
-          }}
-        >
-          {canStart && (
-            <button
-              disabled={actionLoading}
-              onClick={handleStart}
-              style={{
-                padding: "10px 20px",
-                cursor: "pointer",
-              }}
-            >
-              ▶ Start Match
-            </button>
-          )}
-
-          {canFinish && (
-            <button
-              disabled={actionLoading}
-              onClick={handleFinish}
-              style={{
-                padding: "10px 20px",
-                cursor: "pointer",
-              }}
-            >
-              ⏹ Finish Match
-            </button>
-          )}
-        </div>
-      </section>
-
-      {/* GOAL */}
-
-      <section
-        style={{
-          border: "1px solid #ddd",
-          borderRadius: 12,
-          padding: 25,
-          marginBottom: 25,
-        }}
-      >
-        <h2>Add Goal</h2>
-
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns:
-              "repeat(auto-fit, minmax(180px, 1fr))",
-            gap: 12,
-          }}
-        >
-          <select
-            value={goalTeam}
-            onChange={(e) => setGoalTeam(e.target.value)}
-            disabled={!canAddEvents || actionLoading}
-          >
-            <option value="">Select team</option>
-            <option value={match.home_team}>{homeTeam}</option>
-            <option value={match.away_team}>{awayTeam}</option>
-          </select>
-
-          <input
-            type="text"
-            placeholder="Player name"
-            value={goalPlayer}
-            onChange={(e) => setGoalPlayer(e.target.value)}
-            disabled={!canAddEvents || actionLoading}
-          />
-
-          <input
-            type="number"
-            min="0"
-            max="120"
-            placeholder="Minute"
-            value={goalMinute}
-            onChange={(e) => setGoalMinute(e.target.value)}
-            disabled={!canAddEvents || actionLoading}
-          />
-
-          <button
-            onClick={handleGoal}
-            disabled={!canAddEvents || actionLoading}
-          >
-            ⚽ Add Goal
-          </button>
-        </div>
-      </section>
-
-      {/* MATCH EVENT */}
-
-      <section
-        style={{
-          border: "1px solid #ddd",
-          borderRadius: 12,
-          padding: 25,
-          marginBottom: 30,
-        }}
-      >
-        <h2>Match Event</h2>
-
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns:
-              "repeat(auto-fit, minmax(180px, 1fr))",
-            gap: 12,
-          }}
-        >
-          <select
-            value={eventTeam}
-            onChange={(e) => setEventTeam(e.target.value)}
-            disabled={!canAddEvents || actionLoading}
-          >
-            <option value="">Select team</option>
-            <option value={match.home_team}>{homeTeam}</option>
-            <option value={match.away_team}>{awayTeam}</option>
-          </select>
-
-          <select
-            value={eventType}
-            onChange={(e) =>
-              setEventType(
-                e.target.value as
-                  | "yellow_card"
-                  | "red_card"
-                  | "penalty_kick"
-                  | "reward"
-              )
-            }
-            disabled={!canAddEvents || actionLoading}
-          >
-            <option value="yellow_card">Yellow Card</option>
-            <option value="red_card">Red Card</option>
-            <option value="penalty_kick">Penalty Kick</option>
-            <option value="reward">Reward</option>
-          </select>
-
-          <input
-            type="text"
-            placeholder="Player name"
-            value={eventPlayer}
-            onChange={(e) => setEventPlayer(e.target.value)}
-            disabled={!canAddEvents || actionLoading}
-          />
-
-          <input
-            type="number"
-            min="0"
-            max="120"
-            placeholder="Minute"
-            value={eventMinute}
-            onChange={(e) => setEventMinute(e.target.value)}
-            disabled={!canAddEvents || actionLoading}
-          />
-
-          {eventType === "reward" && (
-            <input
-              type="number"
-              placeholder="Bonus points"
-              value={eventPoints}
-              onChange={(e) => setEventPoints(e.target.value)}
-              disabled={!canAddEvents || actionLoading}
-            />
-          )}
-
-          <input
-            type="text"
-            placeholder="Reason / note"
-            value={eventNote}
-            onChange={(e) => setEventNote(e.target.value)}
-            disabled={!canAddEvents || actionLoading}
-          />
-
-          <button
-            onClick={handleEvent}
-            disabled={!canAddEvents || actionLoading}
-          >
-            Add Event
-          </button>
-        </div>
-      </section>
-
-      {/* TIMELINE */}
-
-      <section
-        style={{
-          border: "1px solid #ddd",
-          borderRadius: 12,
-          padding: 25,
-        }}
-      >
-        <h2>Event Timeline</h2>
-
-        {events.length === 0 ? (
-          <p>No events recorded yet.</p>
-        ) : (
+        <div className="mb-8 flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
           <div>
-            {events.map((event) => (
-              <div
-                key={event.id}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 15,
-                  padding: "14px 0",
-                  borderBottom: "1px solid #eee",
-                }}
-              >
-                <strong style={{ minWidth: 45 }}>
-                  {event.minute}&apos;
-                </strong>
+            <p className="text-sm uppercase tracking-widest text-blue-400">
+              Admin Match Control
+            </p>
 
-                <strong style={{ minWidth: 130 }}>
-                  {event.type.replaceAll("_", " ")}
-                </strong>
+            <h1 className="mt-2 text-3xl font-bold">
+              {homeTeam} vs {awayTeam}
+            </h1>
 
-                <span>{teamName(event.team)}</span>
+            <p className="mt-2 text-sm text-slate-500">
+              Match #{match.id}
+            </p>
+          </div>
 
-                {event.player_name && (
-                  <span>— {event.player_name}</span>
-                )}
+          <div className="flex items-center gap-3">
+            {socketConnected && (
+              <span className="rounded-full bg-green-950 px-3 py-2 text-xs font-semibold text-green-400">
+                ● Realtime connected
+              </span>
+            )}
 
-                {event.points !== 0 && (
-                  <span>
-                    — {event.points > 0 ? "+" : ""}
-                    {event.points} pts
-                  </span>
-                )}
+            <span
+              className={`rounded-full px-4 py-2 text-sm font-semibold uppercase ${
+                match.status === "live"
+                  ? "bg-red-950 text-red-400"
+                  : match.status === "finished"
+                    ? "bg-slate-800 text-slate-300"
+                    : "bg-yellow-950 text-yellow-400"
+              }`}
+            >
+              {match.status}
+            </span>
+          </div>
+        </div>
 
-                {event.note && <span>— {event.note}</span>}
-              </div>
-            ))}
+        {error && (
+          <div className="mb-6 rounded-2xl border border-red-900 bg-red-950/40 p-4 text-red-300">
+            {error}
           </div>
         )}
-      </section>
+
+        <section className="rounded-3xl border border-slate-800 bg-slate-900 p-8">
+          <div className="text-center">
+            <p className="text-sm uppercase tracking-widest text-slate-500">
+              Live Scoreboard
+            </p>
+
+            <div className="mt-8 flex items-center justify-center gap-5 sm:gap-12">
+              <div className="flex-1 text-right">
+                <p className="text-lg font-semibold sm:text-2xl">
+                  {homeTeam}
+                </p>
+
+                <p className="mt-1 text-sm text-slate-500">
+                  {teamCode(match.home_team)}
+                </p>
+              </div>
+
+              <div className="shrink-0">
+                <p className="text-5xl font-bold sm:text-6xl">
+                  {match.home_score} - {match.away_score}
+                </p>
+              </div>
+
+              <div className="flex-1 text-left">
+                <p className="text-lg font-semibold sm:text-2xl">
+                  {awayTeam}
+                </p>
+
+                <p className="mt-1 text-sm text-slate-500">
+                  {teamCode(match.away_team)}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-8 flex flex-wrap justify-center gap-3 border-t border-slate-800 pt-6">
+            {canStart && (
+              <button
+                disabled={actionLoading}
+                onClick={handleStart}
+                className="rounded-xl bg-green-600 px-6 py-3 font-semibold transition hover:bg-green-500 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {actionLoading ? "Processing..." : "▶ Start Match"}
+              </button>
+            )}
+
+            {canFinish && (
+              <button
+                disabled={actionLoading}
+                onClick={handleFinish}
+                className="rounded-xl bg-red-600 px-6 py-3 font-semibold transition hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {actionLoading ? "Processing..." : "⏹ Finish Match"}
+              </button>
+            )}
+
+            {match.status === "finished" && (
+              <span className="rounded-xl bg-slate-800 px-6 py-3 text-sm font-semibold text-slate-400">
+                Match finished
+              </span>
+            )}
+          </div>
+        </section>
+
+        <div className="mt-6 grid gap-6 lg:grid-cols-2">
+          <section className="rounded-3xl border border-slate-800 bg-slate-900 p-6">
+            <div className="mb-5">
+              <p className="text-sm uppercase tracking-widest text-blue-400">
+                Live Action
+              </p>
+
+              <h2 className="mt-1 text-2xl font-semibold">
+                Add Goal
+              </h2>
+
+              {!canAddEvents && (
+                <p className="mt-2 text-sm text-slate-500">
+                  Start the match before recording events.
+                </p>
+              )}
+            </div>
+
+            <div className="space-y-4">
+              <select
+                value={goalTeam}
+                onChange={(e) => setGoalTeam(e.target.value)}
+                disabled={!canAddEvents || actionLoading}
+                className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none focus:border-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <option value="">Select team</option>
+
+                <option value={match.home_team}>
+                  {homeTeam}
+                </option>
+
+                <option value={match.away_team}>
+                  {awayTeam}
+                </option>
+              </select>
+
+              <input
+                type="text"
+                placeholder="Player name"
+                value={goalPlayer}
+                onChange={(e) => setGoalPlayer(e.target.value)}
+                disabled={!canAddEvents || actionLoading}
+                className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none placeholder:text-slate-600 focus:border-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+              />
+
+              <input
+                type="number"
+                min="0"
+                max="120"
+                placeholder="Minute"
+                value={goalMinute}
+                onChange={(e) => setGoalMinute(e.target.value)}
+                disabled={!canAddEvents || actionLoading}
+                className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none placeholder:text-slate-600 focus:border-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+              />
+
+              <button
+                onClick={handleGoal}
+                disabled={!canAddEvents || actionLoading}
+                className="w-full rounded-xl bg-blue-600 px-5 py-3 font-semibold transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                ⚽ Add Goal
+              </button>
+            </div>
+          </section>
+
+          <section className="rounded-3xl border border-slate-800 bg-slate-900 p-6">
+            <div className="mb-5">
+              <p className="text-sm uppercase tracking-widest text-blue-400">
+                Live Action
+              </p>
+
+              <h2 className="mt-1 text-2xl font-semibold">
+                Add Match Event
+              </h2>
+
+              {!canAddEvents && (
+                <p className="mt-2 text-sm text-slate-500">
+                  Start the match before recording events.
+                </p>
+              )}
+            </div>
+
+            <div className="space-y-4">
+              <select
+                value={eventTeam}
+                onChange={(e) => setEventTeam(e.target.value)}
+                disabled={!canAddEvents || actionLoading}
+                className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none focus:border-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <option value="">Select team</option>
+
+                <option value={match.home_team}>
+                  {homeTeam}
+                </option>
+
+                <option value={match.away_team}>
+                  {awayTeam}
+                </option>
+              </select>
+
+              <select
+                value={eventType}
+                onChange={(e) =>
+                  setEventType(
+                    e.target.value as
+                      | "yellow_card"
+                      | "red_card"
+                      | "penalty_kick"
+                      | "reward"
+                  )
+                }
+                disabled={!canAddEvents || actionLoading}
+                className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none focus:border-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <option value="yellow_card">
+                  🟨 Yellow Card
+                </option>
+
+                <option value="red_card">
+                  🟥 Red Card
+                </option>
+
+                <option value="penalty_kick">
+                  🎯 Penalty Kick
+                </option>
+
+                <option value="reward">
+                  🏆 Reward
+                </option>
+              </select>
+
+              <input
+                type="text"
+                placeholder="Player name"
+                value={eventPlayer}
+                onChange={(e) => setEventPlayer(e.target.value)}
+                disabled={!canAddEvents || actionLoading}
+                className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none placeholder:text-slate-600 focus:border-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+              />
+
+              <input
+                type="number"
+                min="0"
+                max="120"
+                placeholder="Minute"
+                value={eventMinute}
+                onChange={(e) => setEventMinute(e.target.value)}
+                disabled={!canAddEvents || actionLoading}
+                className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none placeholder:text-slate-600 focus:border-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+              />
+
+              {eventType === "reward" && (
+                <input
+                  type="number"
+                  placeholder="Bonus points"
+                  value={eventPoints}
+                  onChange={(e) => setEventPoints(e.target.value)}
+                  disabled={!canAddEvents || actionLoading}
+                  className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none placeholder:text-slate-600 focus:border-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+                />
+              )}
+
+              <input
+                type="text"
+                placeholder="Reason / note"
+                value={eventNote}
+                onChange={(e) => setEventNote(e.target.value)}
+                disabled={!canAddEvents || actionLoading}
+                className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none placeholder:text-slate-600 focus:border-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+              />
+
+              <button
+                onClick={handleEvent}
+                disabled={!canAddEvents || actionLoading}
+                className="w-full rounded-xl bg-blue-600 px-5 py-3 font-semibold transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Add Event
+              </button>
+            </div>
+          </section>
+        </div>
+
+        <section className="mt-6 rounded-3xl border border-slate-800 bg-slate-900 p-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm uppercase tracking-widest text-blue-400">
+                Match Activity
+              </p>
+
+              <h2 className="mt-1 text-2xl font-semibold">
+                Event Timeline
+              </h2>
+            </div>
+
+            {socketConnected && (
+              <span className="text-xs font-semibold text-green-400">
+                ● Realtime
+              </span>
+            )}
+          </div>
+
+          {events.length === 0 ? (
+            <div className="mt-6 rounded-2xl border border-slate-800 bg-slate-950 p-6 text-center">
+              <p className="text-slate-500">
+                No events recorded yet.
+              </p>
+            </div>
+          ) : (
+            <div className="mt-6 space-y-3">
+              {events.map((event) => (
+                <div
+                  key={event.id}
+                  className="flex items-start gap-4 rounded-2xl border border-slate-800 bg-slate-950 p-4"
+                >
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-slate-800">
+                    {eventIcon(event.type)}
+                  </div>
+
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-semibold">
+                        {eventLabel(event.type)}
+                      </span>
+
+                      <span className="text-sm text-blue-400">
+                        {event.minute}'
+                      </span>
+
+                      <span className="text-sm text-slate-500">
+                        {teamName(event.team)}
+                      </span>
+                    </div>
+
+                    {event.player_name && (
+                      <p className="mt-1 text-sm text-slate-300">
+                        {event.player_name}
+                      </p>
+                    )}
+
+                    {event.note && (
+                      <p className="mt-1 text-sm text-slate-500">
+                        {event.note}
+                      </p>
+                    )}
+
+                    {event.type === "reward" &&
+                      event.points !== 0 && (
+                        <p className="mt-1 text-sm font-semibold text-yellow-400">
+                          +{event.points} reward points
+                        </p>
+                      )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      </div>
     </main>
   );
 }
