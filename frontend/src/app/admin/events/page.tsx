@@ -1,25 +1,46 @@
 
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import Link from "next/link";
+import { FormEvent, useCallback, useEffect, useState } from "react";
 
 const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_URL ||
-  "http://localhost:8000/api";
+  process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
 
-interface Event {
+type EventStatus = "draft" | "active" | "completed";
+
+interface TournamentEvent {
   id: number;
   name: string;
   description: string;
   start_date: string;
   end_date: string;
-  status: "draft" | "active" | "completed";
+  status: EventStatus;
 }
 
-function getCookie(name: string): string | null {
-  const cookies = document.cookie.split(";");
+interface EventForm {
+  name: string;
+  description: string;
+  start_date: string;
+  end_date: string;
+  status: EventStatus;
+}
 
-  for (const cookie of cookies) {
+const EMPTY_FORM: EventForm = {
+  name: "",
+  description: "",
+  start_date: "",
+  end_date: "",
+  status: "draft",
+};
+
+const inputClass =
+  "w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm text-white outline-none transition placeholder:text-slate-600 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20";
+
+const labelClass = "mb-2 block text-sm font-semibold text-slate-300";
+
+function getCookie(name: string): string | null {
+  for (const cookie of document.cookie.split(";")) {
     const [key, ...value] = cookie.trim().split("=");
 
     if (key === name) {
@@ -30,7 +51,7 @@ function getCookie(name: string): string | null {
   return null;
 }
 
-async function getCsrfToken(): Promise<string | null> {
+async function getCsrfToken(): Promise<string> {
   const response = await fetch(`${API_BASE_URL}/auth/csrf/`, {
     method: "GET",
     credentials: "include",
@@ -40,133 +61,278 @@ async function getCsrfToken(): Promise<string | null> {
     throw new Error("Unable to initialize CSRF protection.");
   }
 
-  return getCookie("csrftoken");
+  const token = getCookie("csrftoken");
+
+  if (!token) {
+    throw new Error(
+      "CSRF cookie missing. Use localhost for both frontend and backend."
+    );
+  }
+
+  return token;
+}
+
+function getApiError(data: unknown, fallback: string): string {
+  if (!data || typeof data !== "object") {
+    return fallback;
+  }
+
+  const errors = data as Record<string, unknown>;
+
+  if (typeof errors.detail === "string") {
+    return errors.detail;
+  }
+
+  return (
+    Object.entries(errors)
+      .map(([field, value]) => {
+        const message = Array.isArray(value)
+          ? value.join(", ")
+          : String(value);
+
+        return `${field}: ${message}`;
+      })
+      .join(" | ") || fallback
+  );
+}
+
+function toDateTimeLocal(value: string): string {
+  if (!value) return "";
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+
+  const pad = (number: number) => String(number).padStart(2, "0");
+
+  return [
+    date.getFullYear(),
+    "-",
+    pad(date.getMonth() + 1),
+    "-",
+    pad(date.getDate()),
+    "T",
+    pad(date.getHours()),
+    ":",
+    pad(date.getMinutes()),
+  ].join("");
+}
+
+function formatDate(value: string): string {
+  if (!value) return "Not specified";
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return date.toLocaleString();
+}
+
+function statusClass(status: EventStatus): string {
+  switch (status) {
+    case "active":
+      return "border-green-800 bg-green-950/50 text-green-400";
+
+    case "completed":
+      return "border-blue-800 bg-blue-950/50 text-blue-400";
+
+    default:
+      return "border-slate-600 bg-slate-800 text-slate-300";
+  }
 }
 
 export default function AdminEventsPage() {
-  const [events, setEvents] = useState<Event[]>([]);
+  const [events, setEvents] = useState<TournamentEvent[]>([]);
+  const [form, setForm] = useState<EventForm>({ ...EMPTY_FORM });
+
+  const [editingId, setEditingId] = useState<number | null>(null);
+
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
+
   const [message, setMessage] = useState("");
+  const [messageType, setMessageType] = useState<"success" | "error">(
+    "success"
+  );
 
-  const [form, setForm] = useState({
-    name: "",
-    description: "",
-    start_date: "",
-    end_date: "",
-    status: "draft",
-  });
+  
+const loadEvents = useCallback(async () => {
+  try {
+    setLoading(true);
 
-  async function loadEvents() {
-    try {
-      setLoading(true);
+    const allEvents: TournamentEvent[] = [];
 
-      const response = await fetch(
-        `${API_BASE_URL}/admin/events/`,
-        {
-          credentials: "include",
-        }
-      );
+    let nextUrl: string | null =
+      `${API_BASE_URL}/admin/events/`;
 
-      if (!response.ok) {
-        setMessage("Unable to load events.");
-        return;
-      }
+    while (nextUrl !== null) {
+      const currentUrl: string = nextUrl;
 
-      const data = await response.json();
-
-      setEvents(data.results ?? data);
-    } catch {
-      setMessage("Unable to connect to the backend.");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    loadEvents();
-  }, []);
-
-  async function createEvent(event: FormEvent) {
-    event.preventDefault();
-    setMessage("");
-
-    try {
-      const csrfToken = await getCsrfToken();
-
-      if (!csrfToken) {
-        setMessage(
-          "CSRF token missing. Please refresh the page and try again."
-        );
-        return;
-      }
-
-      const response = await fetch(
-        `${API_BASE_URL}/admin/events/`,
-        {
-          method: "POST",
-          credentials: "include",
-          headers: {
-            "Content-Type": "application/json",
-            "X-CSRFToken": csrfToken,
-          },
-          body: JSON.stringify(form),
-        }
-      );
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        const errorMessage =
-          data.detail ||
-          Object.values(data)
-            .flat()
-            .join(" ");
-
-        setMessage(errorMessage || "Unable to create event.");
-        return;
-      }
-
-      setForm({
-        name: "",
-        description: "",
-        start_date: "",
-        end_date: "",
-        status: "draft",
+      const response = await fetch(currentUrl, {
+        method: "GET",
+        credentials: "include",
+        cache: "no-store",
       });
 
-      setMessage("Event created successfully.");
+      if (!response.ok) {
+        throw new Error(
+          `Unable to load events (HTTP ${response.status}).`
+        );
+      }
 
-      await loadEvents();
-    } catch (error) {
-      console.error("CREATE EVENT ERROR:", error);
+      const data = await response.json();
 
-      setMessage(
-        error instanceof Error
-          ? error.message
-          : "Unable to create event."
-      );
+      if (Array.isArray(data)) {
+        allEvents.push(...data);
+        nextUrl = null;
+      } else {
+        allEvents.push(...(data.results ?? []));
+
+        nextUrl = data.next
+          ? new URL(data.next, currentUrl).toString()
+          : null;
+      }
     }
+
+    setEvents(allEvents);
+  } catch (error) {
+    setMessageType("error");
+
+    setMessage(
+      error instanceof Error
+        ? error.message
+        : "Unable to connect to the backend."
+    );
+  } finally {
+    setLoading(false);
+  }
+}, []);
+
+  useEffect(() => {
+    void loadEvents();
+  }, [loadEvents]);
+
+  function showMessage(
+    text: string,
+    type: "success" | "error" = "success"
+  ) {
+    setMessage(text);
+    setMessageType(type);
   }
 
-  async function deleteEvent(id: number) {
-    if (!window.confirm("Delete this event?")) {
+  function resetForm() {
+    setEditingId(null);
+    setForm({ ...EMPTY_FORM });
+  }
+
+  function beginEditing(event: TournamentEvent) {
+    setEditingId(event.id);
+
+    setForm({
+      name: event.name,
+      description: event.description ?? "",
+      start_date: toDateTimeLocal(event.start_date),
+      end_date: toDateTimeLocal(event.end_date),
+      status: event.status,
+    });
+
+    setMessage("");
+
+    window.scrollTo({
+      top: 0,
+      behavior: "smooth",
+    });
+  }
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (saving) return;
+
+    if (new Date(form.end_date) < new Date(form.start_date)) {
+      showMessage(
+        "End date cannot be earlier than the start date.",
+        "error"
+      );
       return;
     }
 
+    setSaving(true);
+    setMessage("");
+
+    const isEditing = editingId !== null;
+
+    try {
+      const csrfToken = await getCsrfToken();
+
+      const url = isEditing
+        ? `${API_BASE_URL}/admin/events/${editingId}/`
+        : `${API_BASE_URL}/admin/events/`;
+
+      const response = await fetch(url, {
+        method: isEditing ? "PATCH" : "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRFToken": csrfToken,
+        },
+        body: JSON.stringify(form),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          getApiError(
+            data,
+            isEditing
+              ? "Unable to update event."
+              : "Unable to create event."
+          )
+        );
+      }
+
+      resetForm();
+
+      await loadEvents();
+
+      showMessage(
+        isEditing
+          ? "Event updated successfully."
+          : "Event created successfully."
+      );
+    } catch (err) {
+      showMessage(
+        err instanceof Error ? err.message : "Unable to save event.",
+        "error"
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function deleteEvent(event: TournamentEvent) {
+    if (deletingId !== null) return;
+
+    const confirmed = window.confirm(
+      `Delete "${event.name}"?\n\nThis may also remove related tournament data. This action cannot be undone.`
+    );
+
+    if (!confirmed) return;
+
+    setDeletingId(event.id);
     setMessage("");
 
     try {
       const csrfToken = await getCsrfToken();
 
-      if (!csrfToken) {
-        setMessage(
-          "CSRF token missing. Please refresh the page and try again."
-        );
-        return;
-      }
-
       const response = await fetch(
-        `${API_BASE_URL}/admin/events/${id}/`,
+        `${API_BASE_URL}/admin/events/${event.id}/`,
         {
           method: "DELETE",
           credentials: "include",
@@ -177,587 +343,395 @@ export default function AdminEventsPage() {
       );
 
       if (!response.ok) {
-        let data: any = {};
+        const data = await response.json().catch(() => ({}));
 
-        try {
-          data = await response.json();
-        } catch {
-          // No JSON response body.
-        }
-
-        setMessage(
-          data.detail ||
-            "Unable to delete event."
+        throw new Error(
+          getApiError(data, "Unable to delete event.")
         );
-
-        return;
       }
 
-      setMessage("Event deleted.");
+      if (editingId === event.id) {
+        resetForm();
+      }
 
       await loadEvents();
-    } catch (error) {
-      console.error("DELETE EVENT ERROR:", error);
-
-      setMessage(
-        error instanceof Error
-          ? error.message
-          : "Unable to connect to the backend."
+      showMessage("Event deleted successfully.");
+    } catch (err) {
+      showMessage(
+        err instanceof Error ? err.message : "Unable to delete event.",
+        "error"
       );
+    } finally {
+      setDeletingId(null);
     }
   }
 
-  function formatDate(value: string) {
-    return new Date(value).toLocaleString();
-  }
+  const activeCount = events.filter(
+    (event) => event.status === "active"
+  ).length;
+
+  const draftCount = events.filter(
+    (event) => event.status === "draft"
+  ).length;
+
+  const completedCount = events.filter(
+    (event) => event.status === "completed"
+  ).length;
 
   return (
-    <main className="admin-page">
-      <div className="admin-page-header">
-        <div>
-          <p className="eyebrow">TOURNAMENT ADMIN</p>
+    <main className="min-h-screen bg-slate-950 text-white">
+      <div className="mx-auto max-w-7xl px-5 py-10 sm:px-8">
+        {/* Header */}
 
-          <h1>Events</h1>
+        <header className="mb-9">
+          <Link
+            href="/admin"
+            className="text-sm font-medium text-blue-400 transition hover:text-blue-300"
+          >
+            ← Admin Dashboard
+          </Link>
 
-          <p className="subtitle">
-            Create and manage football tournament events.
-          </p>
-        </div>
+          <div className="mt-7">
+            <p className="text-xs font-bold uppercase tracking-[0.25em] text-blue-400">
+              Tournament Administration
+            </p>
 
-        <div className="event-count">
-          <span>{events.length}</span>
-          <small>Events</small>
-        </div>
-      </div>
+            <h1 className="mt-3 text-4xl font-bold tracking-tight">
+              Event Management
+            </h1>
 
-      {message && (
-        <div className="admin-message">
-          {message}
-        </div>
-      )}
-
-      <section className="admin-card create-event-card">
-        <div className="card-heading">
-          <div>
-            <h2>Create Event</h2>
-
-            <p>
-              Set up a new football tournament.
+            <p className="mt-3 text-sm text-slate-400">
+              Create, edit and manage football tournaments.
             </p>
           </div>
-        </div>
+        </header>
 
-        <form
-          onSubmit={createEvent}
-          className="event-form"
-        >
-          <div className="form-group full">
-            <label>Event Name</label>
+        {/* Summary cards */}
 
-            <input
-              type="text"
-              placeholder="e.g. Islamabad Football Cup"
-              value={form.name}
-              onChange={(e) =>
-                setForm({
-                  ...form,
-                  name: e.target.value,
-                })
-              }
-              required
-            />
-          </div>
-
-          <div className="form-group full">
-            <label>Description</label>
-
-            <textarea
-              placeholder="Describe the tournament..."
-              value={form.description}
-              onChange={(e) =>
-                setForm({
-                  ...form,
-                  description: e.target.value,
-                })
-              }
-            />
-          </div>
-
-          <div className="form-group">
-            <label>Start Date</label>
-
-            <input
-              type="datetime-local"
-              value={form.start_date}
-              onChange={(e) =>
-                setForm({
-                  ...form,
-                  start_date: e.target.value,
-                })
-              }
-              required
-            />
-          </div>
-
-          <div className="form-group">
-            <label>End Date</label>
-
-            <input
-              type="datetime-local"
-              value={form.end_date}
-              onChange={(e) =>
-                setForm({
-                  ...form,
-                  end_date: e.target.value,
-                })
-              }
-              required
-            />
-          </div>
-
-          <div className="form-group">
-            <label>Status</label>
-
-            <select
-              value={form.status}
-              onChange={(e) =>
-                setForm({
-                  ...form,
-                  status: e.target.value,
-                })
-              }
+        <section className="mb-8 grid grid-cols-2 gap-4 lg:grid-cols-4">
+          {[
+            { label: "Total Events", value: events.length },
+            { label: "Active", value: activeCount },
+            { label: "Draft", value: draftCount },
+            { label: "Completed", value: completedCount },
+          ].map((item) => (
+            <div
+              key={item.label}
+              className="rounded-2xl border border-slate-800 bg-slate-900 p-5"
             >
-              <option value="draft">Draft</option>
-              <option value="active">Active</option>
-              <option value="completed">
-                Completed
-              </option>
-            </select>
-          </div>
+              <p className="text-sm text-slate-400">
+                {item.label}
+              </p>
 
-          <div className="form-actions">
-            <button
-              type="submit"
-              className="primary-button"
-            >
-              + Create Event
-            </button>
-          </div>
-        </form>
-      </section>
+              <p className="mt-3 text-3xl font-bold text-white">
+                {item.value}
+              </p>
+            </div>
+          ))}
+        </section>
 
-      <section className="events-section">
-        <div className="section-heading">
-          <div>
-            <h2>Existing Events</h2>
-            <p>Your tournament events</p>
-          </div>
-        </div>
+        {/* Feedback */}
 
-        {loading ? (
-          <div className="empty-state">
-            <div className="spinner" />
-            <p>Loading events...</p>
-          </div>
-        ) : events.length === 0 ? (
-          <div className="empty-state">
-            <div className="empty-icon">⚽</div>
-
-            <h3>No events yet</h3>
-
-            <p>
-              Create your first tournament using the
-              form above.
-            </p>
-          </div>
-        ) : (
-          <div className="event-grid">
-            {events.map((event) => (
-              <article
-                key={event.id}
-                className="event-card"
-              >
-                <div className="event-card-top">
-                  <span
-                    className={`status-badge ${event.status}`}
-                  >
-                    {event.status}
-                  </span>
-
-                  <span className="event-id">
-                    #{event.id}
-                  </span>
-                </div>
-
-                <h3>{event.name}</h3>
-
-                <p className="event-description">
-                  {event.description ||
-                    "No description provided."}
-                </p>
-
-                <div className="event-dates">
-                  <div>
-                    <span>START</span>
-
-                    <strong>
-                      {formatDate(event.start_date)}
-                    </strong>
-                  </div>
-
-                  <div>
-                    <span>END</span>
-
-                    <strong>
-                      {formatDate(event.end_date)}
-                    </strong>
-                  </div>
-                </div>
-
-                <div className="event-card-footer">
-                  <button
-                    className="danger-button"
-                    onClick={() =>
-                      deleteEvent(event.id)
-                    }
-                  >
-                    Delete
-                  </button>
-                </div>
-              </article>
-            ))}
+        {message && (
+          <div
+            role="alert"
+            className={`mb-7 rounded-xl border px-5 py-4 text-sm ${
+              messageType === "error"
+                ? "border-red-900 bg-red-950/40 text-red-300"
+                : "border-green-900 bg-green-950/30 text-green-300"
+            }`}
+          >
+            {message}
           </div>
         )}
-      </section>
 
-      <style jsx>{`
-        .admin-page {
-          min-height: 100vh;
-          padding: 40px;
-          background: #0f172a;
-          color: #e2e8f0;
-        }
+        {/* Create / Edit form */}
 
-        .admin-page-header {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          margin-bottom: 32px;
-        }
+        <section className="mb-11 rounded-3xl border border-slate-800 bg-slate-900 p-6 sm:p-8">
+          <div className="mb-7 flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <h2 className="text-2xl font-bold">
+                {editingId !== null
+                  ? `Edit Event #${editingId}`
+                  : "Create New Event"}
+              </h2>
 
-        .eyebrow {
-          margin: 0 0 8px;
-          font-size: 12px;
-          font-weight: 700;
-          letter-spacing: 1.5px;
-          color: #60a5fa;
-        }
+              <p className="mt-2 text-sm text-slate-400">
+                {editingId !== null
+                  ? "Update the selected tournament information."
+                  : "Set up a new football tournament."}
+              </p>
+            </div>
 
-        h1 {
-          margin: 0;
-          font-size: 36px;
-          color: white;
-        }
+            {editingId !== null && (
+              <button
+                type="button"
+                onClick={resetForm}
+                disabled={saving}
+                className="rounded-xl border border-slate-700 px-4 py-2 text-sm text-slate-300 transition hover:border-slate-500 hover:text-white disabled:opacity-50"
+              >
+                Cancel Editing
+              </button>
+            )}
+          </div>
 
-        .subtitle {
-          margin-top: 8px;
-          color: #94a3b8;
-        }
+          <form
+            onSubmit={handleSubmit}
+            className="grid gap-5 md:grid-cols-2"
+          >
+            <div className="md:col-span-2">
+              <label htmlFor="event-name" className={labelClass}>
+                Event Name
+              </label>
 
-        .event-count {
-          min-width: 100px;
-          padding: 16px 22px;
-          border: 1px solid #334155;
-          border-radius: 14px;
-          background: #111c32;
-          text-align: center;
-        }
+              <input
+                id="event-name"
+                type="text"
+                value={form.name}
+                onChange={(e) =>
+                  setForm((current) => ({
+                    ...current,
+                    name: e.target.value,
+                  }))
+                }
+                placeholder="e.g. Islamabad Football Cup"
+                className={inputClass}
+                required
+              />
+            </div>
 
-        .event-count span {
-          display: block;
-          font-size: 28px;
-          font-weight: 700;
-          color: #60a5fa;
-        }
+            <div className="md:col-span-2">
+              <label htmlFor="event-description" className={labelClass}>
+                Description
+              </label>
 
-        .event-count small {
-          color: #94a3b8;
-        }
+              <textarea
+                id="event-description"
+                value={form.description}
+                onChange={(e) =>
+                  setForm((current) => ({
+                    ...current,
+                    description: e.target.value,
+                  }))
+                }
+                placeholder="Describe the tournament..."
+                rows={4}
+                className={`${inputClass} resize-y`}
+              />
+            </div>
 
-        .admin-message {
-          margin-bottom: 24px;
-          padding: 14px 18px;
-          border-radius: 10px;
-          background: #172554;
-          border: 1px solid #1d4ed8;
-          color: #bfdbfe;
-        }
+            <div>
+              <label htmlFor="start-date" className={labelClass}>
+                Start Date
+              </label>
 
-        .admin-card {
-          background: #111c32;
-          border: 1px solid #263449;
-          border-radius: 18px;
-          padding: 28px;
-          margin-bottom: 42px;
-        }
+              <input
+                id="start-date"
+                type="datetime-local"
+                value={form.start_date}
+                onChange={(e) =>
+                  setForm((current) => ({
+                    ...current,
+                    start_date: e.target.value,
+                  }))
+                }
+                className={inputClass}
+                required
+              />
+            </div>
 
-        .card-heading h2,
-        .section-heading h2 {
-          margin: 0;
-          color: white;
-          font-size: 22px;
-        }
+            <div>
+              <label htmlFor="end-date" className={labelClass}>
+                End Date
+              </label>
 
-        .card-heading p,
-        .section-heading p {
-          margin: 6px 0 0;
-          color: #64748b;
-        }
+              <input
+                id="end-date"
+                type="datetime-local"
+                value={form.end_date}
+                min={form.start_date || undefined}
+                onChange={(e) =>
+                  setForm((current) => ({
+                    ...current,
+                    end_date: e.target.value,
+                  }))
+                }
+                className={inputClass}
+                required
+              />
+            </div>
 
-        .event-form {
-          display: grid;
-          grid-template-columns: repeat(2, 1fr);
-          gap: 20px;
-          margin-top: 26px;
-        }
+            <div>
+              <label htmlFor="event-status" className={labelClass}>
+                Status
+              </label>
 
-        .form-group {
-          display: flex;
-          flex-direction: column;
-          gap: 8px;
-        }
+              <select
+                id="event-status"
+                value={form.status}
+                onChange={(e) =>
+                  setForm((current) => ({
+                    ...current,
+                    status: e.target.value as EventStatus,
+                  }))
+                }
+                className={inputClass}
+              >
+                <option value="draft">Draft</option>
+                <option value="active">Active</option>
+                <option value="completed">Completed</option>
+              </select>
+            </div>
 
-        .form-group.full {
-          grid-column: 1 / -1;
-        }
+            <div className="flex items-end">
+              <button
+                type="submit"
+                disabled={saving}
+                className="w-full rounded-xl bg-blue-600 px-5 py-3 font-semibold text-white transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {saving
+                  ? "Saving..."
+                  : editingId !== null
+                    ? "Save Changes"
+                    : "+ Create Event"}
+              </button>
+            </div>
+          </form>
+        </section>
 
-        label {
-          font-size: 13px;
-          font-weight: 600;
-          color: #cbd5e1;
-        }
+        {/* Existing events */}
 
-        input,
-        textarea,
-        select {
-          width: 100%;
-          box-sizing: border-box;
-          border: 1px solid #334155;
-          border-radius: 10px;
-          background: #0f172a;
-          color: white;
-          padding: 13px 14px;
-          font-size: 14px;
-          outline: none;
-        }
+        <section>
+          <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
+            <div>
+              <h2 className="text-2xl font-bold">
+                Existing Events
+              </h2>
 
-        input:focus,
-        textarea:focus,
-        select:focus {
-          border-color: #3b82f6;
-        }
+              <p className="mt-2 text-sm text-slate-400">
+                Manage your tournament records.
+              </p>
+            </div>
 
-        textarea {
-          min-height: 100px;
-          resize: vertical;
-        }
+            <button
+              type="button"
+              onClick={() => void loadEvents()}
+              disabled={loading}
+              className="rounded-xl border border-slate-700 bg-slate-900 px-5 py-2.5 text-sm font-medium text-slate-300 transition hover:border-blue-500 hover:text-white disabled:opacity-50"
+            >
+              {loading ? "Loading..." : "Refresh"}
+            </button>
+          </div>
 
-        .form-actions {
-          display: flex;
-          align-items: end;
-        }
+          {loading ? (
+            <div className="rounded-3xl border border-slate-800 bg-slate-900 py-16 text-center">
+              <div className="mx-auto h-9 w-9 animate-spin rounded-full border-4 border-slate-700 border-t-blue-500" />
 
-        .primary-button {
-          width: 100%;
-          padding: 13px 18px;
-          border: none;
-          border-radius: 10px;
-          background: #2563eb;
-          color: white;
-          font-weight: 700;
-          cursor: pointer;
-        }
+              <p className="mt-5 text-sm text-slate-400">
+                Loading tournament events...
+              </p>
+            </div>
+          ) : events.length === 0 ? (
+            <div className="rounded-3xl border border-dashed border-slate-700 bg-slate-900 px-6 py-16 text-center">
+              <div className="text-5xl">🏆</div>
 
-        .primary-button:hover {
-          background: #1d4ed8;
-        }
+              <h3 className="mt-5 text-xl font-semibold">
+                No events yet
+              </h3>
 
-        .section-heading {
-          margin-bottom: 18px;
-        }
+              <p className="mt-3 text-sm text-slate-400">
+                Create your first tournament using the form above.
+              </p>
+            </div>
+          ) : (
+            <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
+              {events.map((event) => (
+                <article
+                  key={event.id}
+                  className="flex flex-col rounded-2xl border border-slate-800 bg-slate-900 p-6 transition hover:border-slate-600"
+                >
+                  <div className="mb-5 flex items-center justify-between gap-3">
+                    <span
+                      className={`rounded-full border px-3 py-1 text-xs font-bold uppercase tracking-wide ${statusClass(
+                        event.status
+                      )}`}
+                    >
+                      {event.status}
+                    </span>
 
-        .event-grid {
-          display: grid;
-          grid-template-columns: repeat(
-            auto-fit,
-            minmax(280px, 1fr)
-          );
-          gap: 20px;
-        }
+                    <span className="text-xs text-slate-500">
+                      Event #{event.id}
+                    </span>
+                  </div>
 
-        .event-card {
-          padding: 22px;
-          border: 1px solid #263449;
-          border-radius: 16px;
-          background: #111c32;
-          transition:
-            transform 0.15s ease,
-            border-color 0.15s ease;
-        }
+                  <h3 className="text-xl font-bold text-white">
+                    {event.name}
+                  </h3>
 
-        .event-card:hover {
-          transform: translateY(-2px);
-          border-color: #3b82f6;
-        }
+                  <p className="mt-3 min-h-12 flex-1 text-sm leading-6 text-slate-400">
+                    {event.description || "No description provided."}
+                  </p>
 
-        .event-card-top {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          margin-bottom: 18px;
-        }
+                  <div className="mt-6 space-y-4 border-y border-slate-800 py-5">
+                    <div>
+                      <p className="text-xs font-bold uppercase tracking-wide text-slate-500">
+                        Start Date
+                      </p>
 
-        .status-badge {
-          padding: 5px 10px;
-          border-radius: 999px;
-          font-size: 11px;
-          font-weight: 700;
-          text-transform: uppercase;
-        }
+                      <p className="mt-1 text-sm text-slate-200">
+                        {formatDate(event.start_date)}
+                      </p>
+                    </div>
 
-        .status-badge.draft {
-          background: #3f3f46;
-          color: #d4d4d8;
-        }
+                    <div>
+                      <p className="text-xs font-bold uppercase tracking-wide text-slate-500">
+                        End Date
+                      </p>
 
-        .status-badge.active {
-          background: #064e3b;
-          color: #6ee7b7;
-        }
+                      <p className="mt-1 text-sm text-slate-200">
+                        {formatDate(event.end_date)}
+                      </p>
+                    </div>
+                  </div>
 
-        .status-badge.completed {
-          background: #172554;
-          color: #93c5fd;
-        }
+                  <div className="mt-5 flex flex-wrap gap-3">
+                    <button
+                      type="button"
+                      onClick={() => beginEditing(event)}
+                      disabled={saving || deletingId !== null}
+                      className="flex-1 rounded-xl border border-blue-800 bg-blue-950/30 px-4 py-2.5 text-sm font-semibold text-blue-300 transition hover:bg-blue-900/40 disabled:opacity-50"
+                    >
+                      Edit
+                    </button>
 
-        .event-id {
-          color: #64748b;
-          font-size: 12px;
-        }
+                    <button
+                      type="button"
+                      onClick={() => void deleteEvent(event)}
+                      disabled={saving || deletingId !== null}
+                      className="flex-1 rounded-xl border border-red-900 bg-red-950/20 px-4 py-2.5 text-sm font-semibold text-red-300 transition hover:bg-red-950/50 disabled:opacity-50"
+                    >
+                      {deletingId === event.id
+                        ? "Deleting..."
+                        : "Delete"}
+                    </button>
 
-        .event-card h3 {
-          margin: 0 0 10px;
-          font-size: 20px;
-          color: white;
-        }
+                    <Link
+                      href={`/events/${event.id}`}
+                      className="w-full rounded-xl border border-slate-700 px-4 py-2.5 text-center text-sm font-semibold text-slate-300 transition hover:border-slate-500 hover:text-white"
+                    >
+                      View Public Event →
+                    </Link>
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
+        </section>
 
-        .event-description {
-          min-height: 42px;
-          margin: 0 0 22px;
-          color: #94a3b8;
-          line-height: 1.5;
-          font-size: 14px;
-        }
-
-        .event-dates {
-          display: grid;
-          gap: 12px;
-          padding: 14px 0;
-          border-top: 1px solid #263449;
-          border-bottom: 1px solid #263449;
-        }
-
-        .event-dates span {
-          display: block;
-          margin-bottom: 4px;
-          font-size: 10px;
-          font-weight: 700;
-          color: #64748b;
-        }
-
-        .event-dates strong {
-          font-size: 13px;
-          font-weight: 500;
-          color: #cbd5e1;
-        }
-
-        .event-card-footer {
-          display: flex;
-          justify-content: flex-end;
-          margin-top: 16px;
-        }
-
-        .danger-button {
-          padding: 8px 14px;
-          border: 1px solid #7f1d1d;
-          border-radius: 8px;
-          background: transparent;
-          color: #fca5a5;
-          cursor: pointer;
-        }
-
-        .danger-button:hover {
-          background: #450a0a;
-        }
-
-        .empty-state {
-          padding: 60px 20px;
-          text-align: center;
-          border: 1px dashed #334155;
-          border-radius: 16px;
-          color: #64748b;
-        }
-
-        .empty-icon {
-          font-size: 42px;
-          margin-bottom: 12px;
-        }
-
-        .empty-state h3 {
-          margin: 0 0 8px;
-          color: #cbd5e1;
-        }
-
-        .empty-state p {
-          margin: 0;
-        }
-
-        .spinner {
-          width: 28px;
-          height: 28px;
-          margin: 0 auto 14px;
-          border: 3px solid #334155;
-          border-top-color: #3b82f6;
-          border-radius: 50%;
-          animation: spin 0.8s linear infinite;
-        }
-
-        @keyframes spin {
-          to {
-            transform: rotate(360deg);
-          }
-        }
-
-        @media (max-width: 700px) {
-          .admin-page {
-            padding: 22px;
-          }
-
-          .admin-page-header {
-            align-items: flex-start;
-            gap: 20px;
-          }
-
-          .event-form {
-            grid-template-columns: 1fr;
-          }
-
-          .form-group.full {
-            grid-column: auto;
-          }
-        }
-      `}</style>
+        <footer className="mt-12 border-t border-slate-800 pt-6 text-center text-xs text-slate-500">
+          Football Tournament Management System · Event Administration
+        </footer>
+      </div>
     </main>
   );
 }
-

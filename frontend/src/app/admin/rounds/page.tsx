@@ -1,22 +1,30 @@
+
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
-import { Event } from "@/lib/api";
+import Link from "next/link";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
 
-interface Round {
+interface TournamentEvent {
+  id: number;
+  name: string;
+  status: "draft" | "active" | "completed";
+}
+
+interface TournamentRound {
   id: number;
   event: number;
   name: string;
   order_number: number;
 }
 
-function getCookie(name: string): string | null {
-  const cookies = document.cookie.split(";");
+const inputClass =
+  "w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm text-white outline-none transition placeholder:text-slate-600 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 disabled:opacity-50";
 
-  for (const cookie of cookies) {
+function getCookie(name: string): string | null {
+  for (const cookie of document.cookie.split(";")) {
     const [key, ...value] = cookie.trim().split("=");
 
     if (key === name) {
@@ -27,8 +35,9 @@ function getCookie(name: string): string | null {
   return null;
 }
 
-async function getCsrfToken(): Promise<string | null> {
+async function getCsrfToken(): Promise<string> {
   const response = await fetch(`${API_BASE_URL}/auth/csrf/`, {
+    method: "GET",
     credentials: "include",
   });
 
@@ -36,100 +45,245 @@ async function getCsrfToken(): Promise<string | null> {
     throw new Error("Unable to initialize CSRF protection.");
   }
 
-  return getCookie("csrftoken");
+  const token = getCookie("csrftoken");
+
+  if (!token) {
+    throw new Error("CSRF cookie missing. Please refresh the page.");
+  }
+
+  return token;
+}
+
+function getApiError(data: unknown, fallback: string): string {
+  if (!data || typeof data !== "object") {
+    return fallback;
+  }
+
+  const errors = data as Record<string, unknown>;
+
+  if (typeof errors.detail === "string") {
+    return errors.detail;
+  }
+
+  return (
+    Object.entries(errors)
+      .map(([field, value]) => {
+        const message = Array.isArray(value)
+          ? value.join(", ")
+          : String(value);
+
+        return `${field}: ${message}`;
+      })
+      .join(" | ") || fallback
+  );
+}
+
+async function fetchAllPages<T>(
+  initialUrl: string,
+  signal?: AbortSignal
+): Promise<T[]> {
+  const items: T[] = [];
+  let nextUrl: string | null = initialUrl;
+
+  while (nextUrl !== null) {
+    const currentUrl: string = nextUrl;
+
+    const response = await fetch(currentUrl, {
+      method: "GET",
+      credentials: "include",
+      cache: "no-store",
+      signal,
+    });
+
+    if (!response.ok) {
+      throw new Error(
+        `Unable to load records (HTTP ${response.status}).`
+      );
+    }
+
+    const data = await response.json();
+
+    if (Array.isArray(data)) {
+      items.push(...data);
+      nextUrl = null;
+    } else {
+      items.push(...(data.results ?? []));
+
+      nextUrl = data.next
+        ? new URL(data.next, currentUrl).toString()
+        : null;
+    }
+  }
+
+  return items;
 }
 
 export default function AdminRoundsPage() {
-  const [events, setEvents] = useState<Event[]>([]);
-  const [rounds, setRounds] = useState<Round[]>([]);
+  const [events, setEvents] = useState<TournamentEvent[]>([]);
+  const [rounds, setRounds] = useState<TournamentRound[]>([]);
 
   const [selectedEventId, setSelectedEventId] = useState("");
 
   const [name, setName] = useState("");
   const [orderNumber, setOrderNumber] = useState("");
 
+  const [editingId, setEditingId] = useState<number | null>(null);
+
   const [loading, setLoading] = useState(true);
+  const [loadingRounds, setLoadingRounds] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
 
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
-  async function loadEvents() {
-    const response = await fetch(`${API_BASE_URL}/admin/events/`, {
-      credentials: "include",
-    });
+  const loadEvents = useCallback(async (signal?: AbortSignal) => {
+    try {
+      setLoading(true);
+      setError("");
 
-    if (!response.ok) {
-      throw new Error("Unable to load events.");
-    }
+      const data = await fetchAllPages<TournamentEvent>(
+        `${API_BASE_URL}/admin/events/`,
+        signal
+      );
 
-    const data = await response.json();
+      if (signal?.aborted) return;
 
-    setEvents(data.results || []);
+      setEvents(data);
 
-    if (data.results?.length && !selectedEventId) {
-      setSelectedEventId(String(data.results[0].id));
-    }
-  }
+      setSelectedEventId((current) => {
+        if (
+          current &&
+          data.some((event) => String(event.id) === current)
+        ) {
+          return current;
+        }
 
-  async function loadRounds(eventId: string) {
-    if (!eventId) {
-      setRounds([]);
-      return;
-    }
+        return data.length > 0 ? String(data[0].id) : "";
+      });
+    } catch (err) {
+      if (signal?.aborted) return;
 
-    const response = await fetch(
-      `${API_BASE_URL}/admin/rounds/?event=${eventId}`,
-      {
-        credentials: "include",
-      }
-    );
-
-    if (!response.ok) {
-      throw new Error("Unable to load rounds.");
-    }
-
-    const data = await response.json();
-
-    setRounds(data.results || []);
-  }
-
-  useEffect(() => {
-    async function initialize() {
-      try {
-        setLoading(true);
-        await loadEvents();
-      } catch (err) {
-        setError(
-          err instanceof Error
-            ? err.message
-            : "Unable to load events."
-        );
-      } finally {
-        setLoading(false);
-      }
-    }
-
-    initialize();
-  }, []);
-
-  useEffect(() => {
-    if (!selectedEventId) return;
-
-    loadRounds(selectedEventId).catch((err) => {
       setError(
         err instanceof Error
           ? err.message
-          : "Unable to load rounds."
+          : "Unable to load tournaments."
       );
-    });
-  }, [selectedEventId]);
+    } finally {
+      if (!signal?.aborted) {
+        setLoading(false);
+      }
+    }
+  }, []);
 
-  async function handleCreateRound(event: FormEvent) {
+  const loadRounds = useCallback(
+    async (eventId: string, signal?: AbortSignal) => {
+      if (!eventId) {
+        setRounds([]);
+        return;
+      }
+
+      try {
+        setLoadingRounds(true);
+        setError("");
+
+        const data = await fetchAllPages<TournamentRound>(
+          `${API_BASE_URL}/admin/rounds/?event=${encodeURIComponent(
+            eventId
+          )}`,
+          signal
+        );
+
+        if (signal?.aborted) return;
+
+        setRounds(
+          data
+            .filter((round) => round.event === Number(eventId))
+            .sort(
+              (a, b) =>
+                a.order_number - b.order_number || a.id - b.id
+            )
+        );
+      } catch (err) {
+        if (signal?.aborted) return;
+
+        setError(
+          err instanceof Error
+            ? err.message
+            : "Unable to load tournament rounds."
+        );
+      } finally {
+        if (!signal?.aborted) {
+          setLoadingRounds(false);
+        }
+      }
+    },
+    []
+  );
+
+  useEffect(() => {
+    const controller = new AbortController();
+
+    void loadEvents(controller.signal);
+
+    return () => controller.abort();
+  }, [loadEvents]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+
+    setRounds([]);
+    resetForm();
+
+    if (selectedEventId) {
+      void loadRounds(selectedEventId, controller.signal);
+    }
+
+    return () => controller.abort();
+  }, [selectedEventId, loadRounds]);
+
+  const sortedRounds = useMemo(
+    () =>
+      [...rounds].sort(
+        (a, b) =>
+          a.order_number - b.order_number || a.id - b.id
+      ),
+    [rounds]
+  );
+
+  const selectedEvent = events.find(
+    (event) => event.id === Number(selectedEventId)
+  );
+
+  function resetForm() {
+    setEditingId(null);
+    setName("");
+    setOrderNumber("");
+  }
+
+  function beginEditing(round: TournamentRound) {
+    setEditingId(round.id);
+    setName(round.name);
+    setOrderNumber(String(round.order_number));
+
+    setError("");
+    setMessage("");
+
+    window.scrollTo({
+      top: 0,
+      behavior: "smooth",
+    });
+  }
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
+    if (saving) return;
+
+    const parsedOrder = Number(orderNumber);
+
     if (!selectedEventId) {
-      setError("Select an event first.");
+      setError("Please select a tournament.");
       return;
     }
 
@@ -138,85 +292,114 @@ export default function AdminRoundsPage() {
       return;
     }
 
-    if (!orderNumber || Number(orderNumber) < 1) {
-      setError("Order number must be at least 1.");
+    if (
+      !orderNumber.trim() ||
+      !Number.isInteger(parsedOrder) ||
+      parsedOrder < 1
+    ) {
+      setError("Order number must be a positive whole number.");
       return;
     }
 
-    try {
-      setSaving(true);
-      setError("");
-      setMessage("");
+    const duplicateOrder = rounds.find(
+      (round) =>
+        round.order_number === parsedOrder &&
+        round.id !== editingId
+    );
 
+    if (duplicateOrder) {
+      setError(
+        `Order ${parsedOrder} is already used by "${duplicateOrder.name}" in this tournament.`
+      );
+      return;
+    }
+
+    const isEditing = editingId !== null;
+    const eventId = selectedEventId;
+
+    setSaving(true);
+    setError("");
+    setMessage("");
+
+    try {
       const csrfToken = await getCsrfToken();
 
-      const response = await fetch(
-        `${API_BASE_URL}/admin/rounds/`,
-        {
-          method: "POST",
-          credentials: "include",
-          headers: {
-            "Content-Type": "application/json",
-            "X-CSRFToken": csrfToken || "",
-          },
-          body: JSON.stringify({
-            event: Number(selectedEventId),
-            name: name.trim(),
-            order_number: Number(orderNumber),
-          }),
-        }
-      );
+      const url = isEditing
+        ? `${API_BASE_URL}/admin/rounds/${editingId}/`
+        : `${API_BASE_URL}/admin/rounds/`;
 
-      const data = await response.json();
+      const response = await fetch(url, {
+        method: isEditing ? "PATCH" : "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRFToken": csrfToken,
+        },
+        body: JSON.stringify({
+          event: Number(eventId),
+          name: name.trim(),
+          order_number: parsedOrder,
+        }),
+      });
+
+      const data = await response.json().catch(() => ({}));
 
       if (!response.ok) {
         throw new Error(
-          data.detail ||
-            data.order_number?.[0] ||
-            data.name?.[0] ||
-            "Unable to create round."
+          getApiError(
+            data,
+            isEditing
+              ? "Unable to update round."
+              : "Unable to create round."
+          )
         );
       }
 
-      setName("");
-      setOrderNumber("");
+      resetForm();
 
-      setMessage("Round created successfully.");
+      await loadRounds(eventId);
 
-      await loadRounds(selectedEventId);
+      setMessage(
+        isEditing
+          ? "Round updated successfully."
+          : "Round created successfully."
+      );
     } catch (err) {
       setError(
         err instanceof Error
           ? err.message
-          : "Unable to create round."
+          : "Unable to save round."
       );
     } finally {
       setSaving(false);
     }
   }
 
-  async function handleDeleteRound(roundId: number) {
-    if (
-      !confirm(
-        "Delete this round? Matches belonging to it will also be affected."
-      )
-    ) {
-      return;
-    }
+  async function handleDeleteRound(round: TournamentRound) {
+    if (deletingId !== null) return;
+
+    const confirmed = window.confirm(
+      `Delete "${round.name}" (Round ${round.order_number})?\n\nMatches belonging to this round may also be deleted or affected. This action cannot be undone.`
+    );
+
+    if (!confirmed) return;
+
+    const eventId = selectedEventId;
+
+    setDeletingId(round.id);
+    setError("");
+    setMessage("");
 
     try {
-      setError("");
-      setMessage("");
-
       const csrfToken = await getCsrfToken();
 
       const response = await fetch(
-        `${API_BASE_URL}/admin/rounds/${roundId}/`,
+        `${API_BASE_URL}/admin/rounds/${round.id}/`,
         {
           method: "DELETE",
           credentials: "include",
           headers: {
-            "X-CSRFToken": csrfToken || "",
+            "X-CSRFToken": csrfToken,
           },
         }
       );
@@ -225,185 +408,345 @@ export default function AdminRoundsPage() {
         const data = await response.json().catch(() => ({}));
 
         throw new Error(
-          data.detail || "Unable to delete round."
+          getApiError(data, "Unable to delete round.")
         );
       }
 
-      setMessage("Round deleted.");
+      if (editingId === round.id) {
+        resetForm();
+      }
 
-      await loadRounds(selectedEventId);
+      await loadRounds(eventId);
+
+      setMessage("Round deleted successfully.");
     } catch (err) {
       setError(
         err instanceof Error
           ? err.message
           : "Unable to delete round."
       );
+    } finally {
+      setDeletingId(null);
     }
   }
 
-  if (loading) {
-    return (
-      <main className="min-h-screen bg-[#070b16] p-8 text-white">
-        <p className="text-slate-400">Loading rounds...</p>
-      </main>
-    );
-  }
-
   return (
-    <main className="min-h-screen bg-[#070b16] p-8 text-white">
-      <div className="mx-auto max-w-6xl">
+    <main className="min-h-screen bg-slate-950 text-white">
+      <div className="mx-auto max-w-7xl px-5 py-10 sm:px-8">
+        {/* Header */}
 
-        <div className="mb-8">
-          <p className="mb-2 text-sm font-semibold uppercase tracking-[0.25em] text-blue-400">
-            Tournament Admin
+        <header className="mb-9">
+          <Link
+            href="/admin"
+            className="text-sm font-medium text-blue-400 transition hover:text-blue-300"
+          >
+            ← Admin Dashboard
+          </Link>
+
+          <p className="mt-7 text-xs font-bold uppercase tracking-[0.25em] text-blue-400">
+            Tournament Administration
           </p>
 
-          <h1 className="text-4xl font-bold">
-            Rounds
+          <h1 className="mt-3 text-4xl font-bold tracking-tight">
+            Rounds Management
           </h1>
 
-          <p className="mt-2 text-slate-400">
-            Create and organize tournament rounds.
+          <p className="mt-3 text-sm text-slate-400">
+            Organize tournament rounds and manage their sequence.
           </p>
-        </div>
+        </header>
+
+        {/* Feedback */}
 
         {error && (
-          <div className="mb-5 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+          <div
+            role="alert"
+            className="mb-6 rounded-xl border border-red-900 bg-red-950/40 px-5 py-4 text-sm text-red-300"
+          >
             {error}
           </div>
         )}
 
         {message && (
-          <div className="mb-5 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-300">
+          <div
+            role="status"
+            className="mb-6 rounded-xl border border-green-900 bg-green-950/30 px-5 py-4 text-sm text-green-300"
+          >
             {message}
           </div>
         )}
 
-        <section className="mb-8 rounded-2xl border border-white/10 bg-[#0d1424] p-6 shadow-xl">
-          <h2 className="mb-5 text-xl font-semibold">
-            Create Round
-          </h2>
+        {/* Event selection */}
+
+        <section className="mb-7 rounded-2xl border border-slate-800 bg-slate-900 p-6">
+          <label
+            htmlFor="event-select"
+            className="mb-3 block text-sm font-semibold text-slate-300"
+          >
+            Select Tournament
+          </label>
+
+          <select
+            id="event-select"
+            value={selectedEventId}
+            onChange={(event) => {
+              setSelectedEventId(event.target.value);
+              setError("");
+              setMessage("");
+            }}
+            disabled={loading || saving || deletingId !== null}
+            className={inputClass}
+          >
+            <option value="">Select tournament</option>
+
+            {events.map((event) => (
+              <option key={event.id} value={event.id}>
+                {event.name} ({event.status})
+              </option>
+            ))}
+          </select>
+
+          {loading && (
+            <p className="mt-3 text-xs text-slate-500">
+              Loading tournaments...
+            </p>
+          )}
+        </section>
+
+        {/* Summary */}
+
+        <section className="mb-7 grid grid-cols-2 gap-4">
+          <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
+            <p className="text-sm text-slate-400">
+              Tournament Rounds
+            </p>
+
+            <p className="mt-3 text-3xl font-bold">
+              {sortedRounds.length}
+            </p>
+          </div>
+
+          <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
+            <p className="text-sm text-slate-400">
+              Next Order Number
+            </p>
+
+            <p className="mt-3 text-3xl font-bold">
+              {sortedRounds.length > 0
+                ? Math.max(
+                    ...sortedRounds.map(
+                      (round) => round.order_number
+                    )
+                  ) + 1
+                : 1}
+            </p>
+          </div>
+        </section>
+
+        {/* Create / Edit form */}
+
+        <section className="mb-9 rounded-3xl border border-slate-800 bg-slate-900 p-6 sm:p-8">
+          <div className="mb-7 flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <h2 className="text-2xl font-bold">
+                {editingId !== null
+                  ? `Edit Round #${editingId}`
+                  : "Create New Round"}
+              </h2>
+
+              <p className="mt-2 text-sm text-slate-400">
+                {editingId !== null
+                  ? "Update the selected tournament round."
+                  : "Give each round a name and unique order number."}
+              </p>
+            </div>
+
+            {editingId !== null && (
+              <button
+                type="button"
+                onClick={resetForm}
+                disabled={saving}
+                className="rounded-xl border border-slate-700 px-4 py-2.5 text-sm text-slate-300 transition hover:border-slate-500 hover:text-white disabled:opacity-50"
+              >
+                Cancel Editing
+              </button>
+            )}
+          </div>
 
           <form
-            onSubmit={handleCreateRound}
-            className="grid gap-4 md:grid-cols-[1fr_1fr_1fr_auto]"
+            onSubmit={handleSubmit}
+            className="grid gap-5 md:grid-cols-[2fr_1fr_auto] md:items-end"
           >
-            <select
-              value={selectedEventId}
-              onChange={(e) =>
-                setSelectedEventId(e.target.value)
-              }
-              className="rounded-xl border border-white/10 bg-[#111a2d] px-4 py-3 text-white outline-none focus:border-blue-500"
-            >
-              {events.length === 0 && (
-                <option value="">
-                  No events available
-                </option>
-              )}
+            <div>
+              <label
+                htmlFor="round-name"
+                className="mb-2 block text-sm font-semibold text-slate-300"
+              >
+                Round Name
+              </label>
 
-              {events.map((event) => (
-                <option key={event.id} value={event.id}>
-                  {event.name}
-                </option>
-              ))}
-            </select>
+              <input
+                id="round-name"
+                type="text"
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                placeholder="e.g. Group Stage - Round 1"
+                disabled={!selectedEventId || saving}
+                className={inputClass}
+                required
+              />
+            </div>
 
-            <input
-              type="text"
-              placeholder="Round name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              className="rounded-xl border border-white/10 bg-[#111a2d] px-4 py-3 text-white outline-none placeholder:text-slate-500 focus:border-blue-500"
-            />
+            <div>
+              <label
+                htmlFor="round-order"
+                className="mb-2 block text-sm font-semibold text-slate-300"
+              >
+                Order Number
+              </label>
 
-            <input
-              type="number"
-              min="1"
-              placeholder="Order number"
-              value={orderNumber}
-              onChange={(e) =>
-                setOrderNumber(e.target.value)
-              }
-              className="rounded-xl border border-white/10 bg-[#111a2d] px-4 py-3 text-white outline-none placeholder:text-slate-500 focus:border-blue-500"
-            />
+              <input
+                id="round-order"
+                type="number"
+                min="1"
+                step="1"
+                value={orderNumber}
+                onChange={(event) =>
+                  setOrderNumber(event.target.value)
+                }
+                placeholder="e.g. 1"
+                disabled={!selectedEventId || saving}
+                className={inputClass}
+                required
+              />
+            </div>
 
             <button
               type="submit"
-              disabled={saving || !selectedEventId}
-              className="rounded-xl bg-blue-600 px-6 py-3 font-semibold transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={
+                !selectedEventId ||
+                loadingRounds ||
+                saving ||
+                deletingId !== null
+              }
+              className="rounded-xl bg-blue-600 px-6 py-3 text-sm font-bold text-white transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {saving ? "Creating..." : "Create Round"}
+              {saving
+                ? "Saving..."
+                : editingId !== null
+                  ? "Save Changes"
+                  : "+ Create Round"}
             </button>
           </form>
         </section>
 
-        <section className="rounded-2xl border border-white/10 bg-[#0d1424] p-6 shadow-xl">
+        {/* Existing rounds */}
 
-          <div className="mb-6 flex items-center justify-between">
+        <section className="rounded-3xl border border-slate-800 bg-slate-900 p-6 sm:p-8">
+          <div className="mb-7 flex flex-wrap items-center justify-between gap-4">
             <div>
-              <h2 className="text-xl font-semibold">
+              <h2 className="text-2xl font-bold">
                 Tournament Rounds
               </h2>
 
-              <p className="text-sm text-slate-400">
-                {events.find(
-                  (event) =>
-                    event.id === Number(selectedEventId)
-                )?.name || "Select an event"}
+              <p className="mt-2 text-sm text-slate-400">
+                {selectedEvent
+                  ? selectedEvent.name
+                  : "Select a tournament to view its rounds."}
               </p>
             </div>
 
-            <span className="rounded-full bg-blue-500/10 px-4 py-2 text-sm text-blue-300">
-              {rounds.length} rounds
-            </span>
+            <button
+              type="button"
+              onClick={() => {
+                if (selectedEventId) {
+                  void loadRounds(selectedEventId);
+                }
+              }}
+              disabled={!selectedEventId || loadingRounds}
+              className="rounded-xl border border-slate-700 px-4 py-2.5 text-sm font-medium text-slate-300 transition hover:border-blue-500 hover:text-white disabled:opacity-50"
+            >
+              {loadingRounds ? "Loading..." : "Refresh"}
+            </button>
           </div>
 
-          {rounds.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-white/10 px-6 py-12 text-center text-slate-500">
-              No rounds created for this event.
+          {loadingRounds ? (
+            <div className="py-14 text-center">
+              <div className="mx-auto h-9 w-9 animate-spin rounded-full border-4 border-slate-700 border-t-blue-500" />
+
+              <p className="mt-4 text-sm text-slate-400">
+                Loading rounds...
+              </p>
+            </div>
+          ) : !selectedEventId ? (
+            <div className="rounded-2xl border border-dashed border-slate-700 px-6 py-14 text-center text-sm text-slate-400">
+              Select a tournament first.
+            </div>
+          ) : sortedRounds.length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-slate-700 px-6 py-14 text-center">
+              <div className="text-4xl">🏆</div>
+
+              <h3 className="mt-4 text-lg font-semibold">
+                No rounds created
+              </h3>
+
+              <p className="mt-2 text-sm text-slate-400">
+                Create the first round using the form above.
+              </p>
             </div>
           ) : (
             <div className="space-y-3">
-              {rounds
-                .sort(
-                  (a, b) =>
-                    a.order_number - b.order_number
-                )
-                .map((round) => (
-                  <div
-                    key={round.id}
-                    className="flex items-center justify-between rounded-xl border border-white/10 bg-[#111a2d] p-5"
-                  >
-                    <div className="flex items-center gap-4">
-                      <div className="flex h-10 w-10 items-center justify-center rounded-full bg-blue-600/20 font-bold text-blue-300">
-                        {round.order_number}
-                      </div>
-
-                      <div>
-                        <p className="font-semibold">
-                          {round.name}
-                        </p>
-
-                        <p className="text-sm text-slate-500">
-                          Round {round.order_number}
-                        </p>
-                      </div>
+              {sortedRounds.map((round) => (
+                <article
+                  key={round.id}
+                  className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-slate-800 bg-slate-950 p-5"
+                >
+                  <div className="flex min-w-0 items-center gap-4">
+                    <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-blue-900 bg-blue-950/40 text-lg font-extrabold text-blue-300">
+                      {round.order_number}
                     </div>
+
+                    <div className="min-w-0">
+                      <h3 className="truncate font-bold">
+                        {round.name}
+                      </h3>
+
+                      <p className="mt-1 text-xs text-slate-500">
+                        Order {round.order_number} · ID #{round.id}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex gap-3">
+                    <button
+                      type="button"
+                      onClick={() => beginEditing(round)}
+                      disabled={saving || deletingId !== null}
+                      className="rounded-xl border border-blue-800 bg-blue-950/30 px-5 py-2.5 text-sm font-semibold text-blue-300 transition hover:bg-blue-900/40 disabled:opacity-50"
+                    >
+                      Edit
+                    </button>
 
                     <button
                       type="button"
-                      onClick={() =>
-                        handleDeleteRound(round.id)
-                      }
-                      className="rounded-lg border border-red-500/20 px-3 py-2 text-xs font-semibold text-red-300 transition hover:bg-red-500/10"
+                      onClick={() => void handleDeleteRound(round)}
+                      disabled={saving || deletingId !== null}
+                      className="rounded-xl border border-red-900 bg-red-950/20 px-5 py-2.5 text-sm font-semibold text-red-300 transition hover:bg-red-950/50 disabled:opacity-50"
                     >
-                      Delete
+                      {deletingId === round.id
+                        ? "Deleting..."
+                        : "Delete"}
                     </button>
                   </div>
-                ))}
+                </article>
+              ))}
             </div>
           )}
         </section>
+
+        <footer className="mt-12 border-t border-slate-800 pt-6 text-center text-xs text-slate-500">
+          Football Tournament Management System · Round Administration
+        </footer>
       </div>
     </main>
   );

@@ -55,9 +55,13 @@ interface SocketMatchEvent {
 
 interface SocketUpdate {
   type: string;
+  event?: string;
+  match_id?: number;
   status?: Match["status"];
   home_score?: number;
   away_score?: number;
+  started_at?: string | null;
+  ended_at?: string | null;
   match_event?: SocketMatchEvent;
 }
 
@@ -100,12 +104,46 @@ function formatDate(value: string | null): string {
     return "Not available";
   }
 
-  return new Date(value).toLocaleString();
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "Not available";
+  }
+
+  return date.toLocaleString();
+}
+
+function normalizeEvents(data: unknown): MatchEvent[] {
+  if (Array.isArray(data)) {
+    return data as MatchEvent[];
+  }
+
+  if (
+    data !== null &&
+    typeof data === "object" &&
+    "results" in data &&
+    Array.isArray(data.results)
+  ) {
+    return data.results as MatchEvent[];
+  }
+
+  return [];
+}
+
+function sortEvents(items: MatchEvent[]): MatchEvent[] {
+  return [...items].sort(
+    (a, b) => a.minute - b.minute || a.id - b.id
+  );
 }
 
 export default function MatchPage() {
   const params = useParams();
-  const matchId = Number(params.id);
+
+  const rawId = Array.isArray(params.id)
+    ? params.id[0]
+    : params.id;
+
+  const matchId = Number(rawId);
 
   const [match, setMatch] = useState<Match | null>(null);
   const [events, setEvents] = useState<MatchEvent[]>([]);
@@ -117,22 +155,41 @@ export default function MatchPage() {
     let cancelled = false;
     let socket: WebSocket | null = null;
 
-    async function initialize() {
-      if (!Number.isInteger(matchId) || matchId <= 0) {
-        setError("Invalid match ID.");
-        setLoading(false);
-        return;
-      }
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+
+    // Prevent an older API response from overwriting a newer one.
+    let refreshSequence = 0;
+
+    if (!Number.isInteger(matchId) || matchId <= 0) {
+      setError("Invalid match ID.");
+      setLoading(false);
+      return;
+    }
+
+    const matchUrl = `${API_BASE_URL}/matches/${matchId}/`;
+    const eventsUrl = `${API_BASE_URL}/matches/${matchId}/events/`;
+    const socketUrl = `${WS_BASE_URL}/ws/matches/${matchId}/`;
+
+    /*
+     * Fetch the latest match details and timeline.
+     * This ensures started_at and ended_at update
+     * even when the WebSocket payload only contains scores.
+     */
+    async function refreshMatch(showLoader = false) {
+      const sequence = ++refreshSequence;
 
       try {
-        setLoading(true);
-        setError("");
+        if (showLoader) {
+          setLoading(true);
+          setError("");
+        }
 
         const [matchResponse, eventsResponse] = await Promise.all([
-          fetch(`${API_BASE_URL}/matches/${matchId}/`, {
+          fetch(matchUrl, {
             cache: "no-store",
           }),
-          fetch(`${API_BASE_URL}/matches/${matchId}/events/`, {
+          fetch(eventsUrl, {
             cache: "no-store",
           }),
         ]);
@@ -149,172 +206,287 @@ export default function MatchPage() {
           );
         }
 
-        const matchData: Match = await matchResponse.json();
-        const eventsData = await eventsResponse.json();
+        const updatedMatch: Match = await matchResponse.json();
+        const eventsData: unknown = await eventsResponse.json();
 
-        if (cancelled) {
+        if (cancelled || sequence !== refreshSequence) {
           return;
         }
 
-        setMatch(matchData);
-        setEvents(
-          Array.isArray(eventsData)
-            ? eventsData
-            : eventsData.results ?? []
-        );
+        setMatch(updatedMatch);
 
-        socket = new WebSocket(
-          `${WS_BASE_URL}/ws/matches/${matchId}/`
-        );
+        const latestEvents = normalizeEvents(eventsData);
 
-        socket.onopen = () => {
-          if (!cancelled) {
-            setSocketConnected(true);
-          }
+        setEvents((current) => {
+          const merged = new Map<number, MatchEvent>();
 
-          // Synchronize once after connecting so updates occurring
-          // during the initial page load are not missed.
-          void Promise.all([
-            fetch(`${API_BASE_URL}/matches/${matchId}/`, {
-              cache: "no-store",
-            }),
-            fetch(`${API_BASE_URL}/matches/${matchId}/events/`, {
-              cache: "no-store",
-            }),
-          ])
-            .then(async ([latestMatch, latestEvents]) => {
-              if (!latestMatch.ok || !latestEvents.ok) {
-                return;
-              }
+          latestEvents.forEach((item) => {
+            merged.set(item.id, item);
+          });
 
-              const updatedMatch: Match = await latestMatch.json();
-              const updatedEvents = await latestEvents.json();
-
-              if (cancelled) {
-                return;
-              }
-
-              setMatch(updatedMatch);
-
-              const latestList: MatchEvent[] = Array.isArray(updatedEvents)
-                ? updatedEvents
-                : updatedEvents.results ?? [];
-
-              setEvents((current) => {
-                const merged = new Map<number, MatchEvent>();
-
-                latestList.forEach((item) => {
-                  merged.set(item.id, item);
-                });
-
-                current.forEach((item) => {
-                  if (!merged.has(item.id)) {
-                    merged.set(item.id, item);
-                  }
-                });
-
-                return Array.from(merged.values()).sort(
-                  (a, b) =>
-                    a.minute - b.minute ||
-                    a.id - b.id
-                );
-              });
-            })
-            .catch((err) => {
-              console.error("Match synchronization failed:", err);
-            });
-        };
-
-        socket.onmessage = (message) => {
-          try {
-            const data: SocketUpdate = JSON.parse(message.data);
-
-            if (data.type === "connection") {
-              return;
+          // Preserve any realtime event received while
+          // the API request was still in progress.
+          current.forEach((item) => {
+            if (!merged.has(item.id)) {
+              merged.set(item.id, item);
             }
+          });
 
-            setMatch((current) => {
-              if (!current) {
-                return current;
-              }
+          return sortEvents(Array.from(merged.values()));
+        });
 
-              return {
-                ...current,
-                status: data.status ?? current.status,
-                home_score:
-                  data.home_score ?? current.home_score,
-                away_score:
-                  data.away_score ?? current.away_score,
-              };
-            });
-
-            if (data.match_event) {
-              const incoming = data.match_event;
-
-              const newEvent: MatchEvent = {
-                id: incoming.id,
-                team: incoming.team_id,
-                type: incoming.type,
-                player_name: incoming.player_name,
-                minute: incoming.minute,
-                points: incoming.points,
-                note: incoming.note,
-                created_at: new Date().toISOString(),
-              };
-
-              setEvents((current) => {
-                if (
-                  current.some((item) => item.id === newEvent.id)
-                ) {
-                  return current;
-                }
-
-                return [...current, newEvent].sort(
-                  (a, b) =>
-                    a.minute - b.minute ||
-                    a.id - b.id
-                );
-              });
-            }
-          } catch (err) {
-            console.error("Invalid WebSocket message:", err);
-          }
-        };
-
-        socket.onclose = () => {
-          if (!cancelled) {
-            setSocketConnected(false);
-          }
-        };
-
-        socket.onerror = () => {
-          if (!cancelled) {
-            setSocketConnected(false);
-          }
-        };
+        setError("");
       } catch (err) {
-        if (!cancelled) {
-          setError(
-            err instanceof Error
-              ? err.message
-              : "Unable to load match."
-          );
+        if (cancelled || sequence !== refreshSequence) {
+          return;
         }
+
+        console.error("Match synchronization failed:", err);
+
+        setError(
+          err instanceof Error
+            ? err.message
+            : "Unable to load match."
+        );
       } finally {
-        if (!cancelled) {
+        if (!cancelled && sequence === refreshSequence && showLoader) {
           setLoading(false);
         }
       }
     }
 
+    /*
+     * Debounce refresh requests.
+     * Multiple WebSocket events arriving close together
+     * will trigger one fresh API synchronization.
+     */
+    function scheduleRefresh() {
+      if (refreshTimer) {
+        clearTimeout(refreshTimer);
+      }
+
+      refreshTimer = setTimeout(() => {
+        refreshTimer = null;
+
+        if (!cancelled) {
+          void refreshMatch();
+        }
+      }, 200);
+    }
+
+    /*
+     * WebSocket connection.
+     */
+    function connectSocket() {
+      if (cancelled) {
+        return;
+      }
+
+      const currentSocket = new WebSocket(socketUrl);
+      socket = currentSocket;
+
+      /*
+       * React Strict Mode may unmount the component
+       * while the WebSocket is still CONNECTING.
+       *
+       * Instead of closing a CONNECTING socket immediately,
+       * close it after its connection opens.
+       */
+      currentSocket.addEventListener("open", () => {
+        if (cancelled) {
+          currentSocket.close(1000, "Component unmounted");
+        }
+      });
+
+      currentSocket.onopen = () => {
+        if (cancelled) {
+          return;
+        }
+
+        setSocketConnected(true);
+
+        // Recover updates missed during initial loading
+        // or while the connection was disconnected.
+        scheduleRefresh();
+      };
+
+      currentSocket.onmessage = (message: MessageEvent) => {
+        if (cancelled) {
+          return;
+        }
+
+        try {
+          const data: SocketUpdate = JSON.parse(message.data);
+
+          if (data.type === "connection") {
+            return;
+          }
+
+          if (
+            data.match_id !== undefined &&
+            Number(data.match_id) !== matchId
+          ) {
+            return;
+          }
+
+          /*
+           * Immediately update the visible scoreboard.
+           */
+          setMatch((current) => {
+            if (!current) {
+              return current;
+            }
+
+            return {
+              ...current,
+
+              status: data.status ?? current.status,
+
+              home_score:
+                data.home_score ?? current.home_score,
+
+              away_score:
+                data.away_score ?? current.away_score,
+
+              started_at:
+                data.started_at !== undefined
+                  ? data.started_at
+                  : current.started_at,
+
+              ended_at:
+                data.ended_at !== undefined
+                  ? data.ended_at
+                  : current.ended_at,
+            };
+          });
+
+          /*
+           * Immediately append a new timeline event.
+           * Duplicate IDs are ignored.
+           */
+          if (data.match_event) {
+            const incoming = data.match_event;
+
+            const newEvent: MatchEvent = {
+              id: incoming.id,
+              team: incoming.team_id,
+              type: incoming.type,
+              player_name: incoming.player_name,
+              minute: incoming.minute,
+              points: incoming.points,
+              note: incoming.note,
+              created_at: new Date().toISOString(),
+            };
+
+            setEvents((current) => {
+              if (
+                current.some((item) => item.id === newEvent.id)
+              ) {
+                return current;
+              }
+
+              return sortEvents([...current, newEvent]);
+            });
+          }
+
+          /*
+           * IMPORTANT FIX:
+           *
+           * Fetch the complete match after each update.
+           * This synchronizes:
+           *
+           * - started_at
+           * - ended_at
+           * - status
+           * - scores
+           * - event timeline
+           *
+           * No browser reload is required.
+           */
+          scheduleRefresh();
+        } catch (err) {
+          console.error("Invalid WebSocket message:", err);
+        }
+      };
+
+      currentSocket.onerror = () => {
+        if (!cancelled) {
+          setSocketConnected(false);
+        }
+      };
+
+      currentSocket.onclose = () => {
+        if (cancelled) {
+          return;
+        }
+
+        setSocketConnected(false);
+
+        if (reconnectTimer) {
+          clearTimeout(reconnectTimer);
+        }
+
+        reconnectTimer = setTimeout(() => {
+          reconnectTimer = null;
+
+          if (!cancelled) {
+            connectSocket();
+          }
+        }, 3000);
+      };
+    }
+
+    /*
+     * Initial page load.
+     */
+    async function initialize() {
+      await refreshMatch(true);
+
+      if (!cancelled) {
+        connectSocket();
+      }
+    }
+
     void initialize();
 
+    /*
+     * Cleanup.
+     */
     return () => {
       cancelled = true;
-      socket?.close();
+
+      refreshSequence += 1;
+
+      if (refreshTimer) {
+        clearTimeout(refreshTimer);
+        refreshTimer = null;
+      }
+
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+
+      const currentSocket = socket;
+
+      if (currentSocket) {
+        currentSocket.onopen = null;
+        currentSocket.onmessage = null;
+        currentSocket.onerror = null;
+        currentSocket.onclose = null;
+
+        if (currentSocket.readyState === WebSocket.OPEN) {
+          currentSocket.close(1000, "Component unmounted");
+        }
+
+        // A CONNECTING socket is handled by its open listener.
+      }
     };
   }, [matchId]);
 
+  /*
+   * Loading state.
+   */
   if (loading) {
     return (
       <main className="min-h-screen bg-slate-950 text-white">
@@ -328,6 +500,9 @@ export default function MatchPage() {
     );
   }
 
+  /*
+   * Match not found.
+   */
   if (!match) {
     return (
       <main className="min-h-screen bg-slate-950 text-white">
@@ -428,6 +603,8 @@ export default function MatchPage() {
           {/* Scoreboard */}
 
           <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3 px-4 py-12 text-center sm:gap-10 sm:px-10">
+            {/* Home Team */}
+
             <div className="min-w-0">
               <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl border border-slate-700 bg-slate-800 text-lg font-bold text-blue-400">
                 {homeTeam.code}
@@ -442,12 +619,16 @@ export default function MatchPage() {
               </p>
             </div>
 
+            {/* Score */}
+
             <div>
               <p className="whitespace-nowrap text-4xl font-extrabold tracking-tight sm:text-7xl">
                 {match.home_score}
+
                 <span className="mx-2 text-slate-600 sm:mx-5">
                   :
                 </span>
+
                 {match.away_score}
               </p>
 
@@ -459,6 +640,8 @@ export default function MatchPage() {
                     : "Not Started"}
               </p>
             </div>
+
+            {/* Away Team */}
 
             <div className="min-w-0">
               <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl border border-slate-700 bg-slate-800 text-lg font-bold text-blue-400">

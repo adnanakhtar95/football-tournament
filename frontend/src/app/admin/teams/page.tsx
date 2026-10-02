@@ -1,10 +1,11 @@
+
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import Link from "next/link";
+import { FormEvent, useCallback, useEffect, useState } from "react";
 
 const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_URL ||
-  "http://localhost:8000/api";
+  process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
 
 interface Team {
   id: number;
@@ -13,10 +14,26 @@ interface Team {
   logo: string | null;
 }
 
-function getCookie(name: string): string | null {
-  const cookies = document.cookie.split(";");
+interface TeamForm {
+  name: string;
+  code: string;
+  logo: string;
+}
 
-  for (const cookie of cookies) {
+const EMPTY_FORM: TeamForm = {
+  name: "",
+  code: "",
+  logo: "",
+};
+
+const inputClass =
+  "w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm text-white outline-none transition placeholder:text-slate-600 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20";
+
+const labelClass =
+  "mb-2 block text-sm font-semibold text-slate-300";
+
+function getCookie(name: string): string | null {
+  for (const cookie of document.cookie.split(";")) {
     const [key, ...value] = cookie.trim().split("=");
 
     if (key === name) {
@@ -27,147 +44,242 @@ function getCookie(name: string): string | null {
   return null;
 }
 
-async function getCsrfToken(): Promise<string | null> {
-  const response = await fetch(
-    `${API_BASE_URL}/auth/csrf/`,
-    {
-      credentials: "include",
-    }
-  );
+async function getCsrfToken(): Promise<string> {
+  const response = await fetch(`${API_BASE_URL}/auth/csrf/`, {
+    method: "GET",
+    credentials: "include",
+  });
 
   if (!response.ok) {
     throw new Error("Unable to initialize CSRF protection.");
   }
 
-  return getCookie("csrftoken");
+  const token = getCookie("csrftoken");
+
+  if (!token) {
+    throw new Error(
+      "CSRF cookie missing. Please refresh and try again."
+    );
+  }
+
+  return token;
+}
+
+function getApiError(data: unknown, fallback: string): string {
+  if (!data || typeof data !== "object") {
+    return fallback;
+  }
+
+  const errors = data as Record<string, unknown>;
+
+  if (typeof errors.detail === "string") {
+    return errors.detail;
+  }
+
+  return (
+    Object.entries(errors)
+      .map(([field, value]) => {
+        const message = Array.isArray(value)
+          ? value.join(", ")
+          : String(value);
+
+        return `${field}: ${message}`;
+      })
+      .join(" | ") || fallback
+  );
 }
 
 export default function AdminTeamsPage() {
   const [teams, setTeams] = useState<Team[]>([]);
+  const [form, setForm] = useState<TeamForm>({ ...EMPTY_FORM });
+
+  const [editingId, setEditingId] = useState<number | null>(null);
+
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
+
   const [message, setMessage] = useState("");
+  const [messageType, setMessageType] = useState<
+    "success" | "error"
+  >("success");
 
-  const [form, setForm] = useState({
-    name: "",
-    code: "",
-    logo: "",
-  });
-
-  async function loadTeams() {
+  const loadTeams = useCallback(async () => {
     try {
       setLoading(true);
 
-      const response = await fetch(
-        `${API_BASE_URL}/admin/teams/`,
-        {
-          credentials: "include",
-        }
-      );
+      const allTeams: Team[] = [];
 
-      if (!response.ok) {
-        setMessage("Unable to load teams.");
-        return;
+      let nextUrl: string | null =
+        `${API_BASE_URL}/admin/teams/`;
+
+      while (nextUrl !== null) {
+        const currentUrl: string = nextUrl;
+
+        const response = await fetch(currentUrl, {
+          method: "GET",
+          credentials: "include",
+          cache: "no-store",
+        });
+
+        if (!response.ok) {
+          throw new Error(
+            `Unable to load teams (HTTP ${response.status}).`
+          );
+        }
+
+        const data = await response.json();
+
+        if (Array.isArray(data)) {
+          allTeams.push(...data);
+          nextUrl = null;
+        } else {
+          allTeams.push(...(data.results ?? []));
+
+          nextUrl = data.next
+            ? new URL(data.next, currentUrl).toString()
+            : null;
+        }
       }
 
-      const data = await response.json();
-
-      setTeams(data.results ?? data);
-    } catch {
-      setMessage("Unable to connect to the backend.");
+      setTeams(allTeams);
+    } catch (error) {
+      showMessage(
+        error instanceof Error
+          ? error.message
+          : "Unable to connect to the backend.",
+        "error"
+      );
     } finally {
       setLoading(false);
     }
-  }
-
-  useEffect(() => {
-    loadTeams();
   }, []);
 
-  async function createTeam(event: FormEvent) {
-    event.preventDefault();
-    setMessage("");
+  useEffect(() => {
+    void loadTeams();
+  }, [loadTeams]);
 
-    try {
-      const csrfToken = await getCsrfToken();
-
-      if (!csrfToken) {
-        setMessage(
-          "CSRF token missing. Please refresh the page and try again."
-        );
-        return;
-      }
-
-      const response = await fetch(
-        `${API_BASE_URL}/admin/teams/`,
-        {
-          method: "POST",
-          credentials: "include",
-          headers: {
-            "Content-Type": "application/json",
-            "X-CSRFToken": csrfToken,
-          },
-          body: JSON.stringify({
-            name: form.name.trim(),
-            code: form.code.trim().toUpperCase(),
-            logo: form.logo.trim() || null,
-          }),
-        }
-      );
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        const errorMessage =
-          data.detail ||
-          Object.values(data)
-            .flat()
-            .join(" ");
-
-        setMessage(
-          errorMessage || "Unable to create team."
-        );
-        return;
-      }
-
-      setForm({
-        name: "",
-        code: "",
-        logo: "",
-      });
-
-      setMessage("Team created successfully.");
-
-      await loadTeams();
-    } catch (error) {
-      console.error("CREATE TEAM ERROR:", error);
-
-      setMessage(
-        error instanceof Error
-          ? error.message
-          : "Unable to create team."
-      );
-    }
+  function showMessage(
+    text: string,
+    type: "success" | "error" = "success"
+  ) {
+    setMessage(text);
+    setMessageType(type);
   }
 
-  async function deleteTeam(id: number) {
-    if (!window.confirm("Delete this team?")) {
+  function resetForm() {
+    setEditingId(null);
+    setForm({ ...EMPTY_FORM });
+  }
+
+  function beginEditing(team: Team) {
+    setEditingId(team.id);
+
+    setForm({
+      name: team.name,
+      code: team.code,
+      logo: team.logo ?? "",
+    });
+
+    setMessage("");
+
+    window.scrollTo({
+      top: 0,
+      behavior: "smooth",
+    });
+  }
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (saving) return;
+
+    const name = form.name.trim();
+    const code = form.code.trim().toUpperCase();
+    const logo = form.logo.trim();
+
+    if (!name || !code) {
+      showMessage("Team name and short code are required.", "error");
       return;
     }
 
+    setSaving(true);
+    setMessage("");
+
+    const isEditing = editingId !== null;
+
+    try {
+      const csrfToken = await getCsrfToken();
+
+      const url = isEditing
+        ? `${API_BASE_URL}/admin/teams/${editingId}/`
+        : `${API_BASE_URL}/admin/teams/`;
+
+      const response = await fetch(url, {
+        method: isEditing ? "PATCH" : "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+          "X-CSRFToken": csrfToken,
+        },
+        body: JSON.stringify({
+          name,
+          code,
+          logo: logo || null,
+        }),
+      });
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(
+          getApiError(
+            data,
+            isEditing
+              ? "Unable to update team."
+              : "Unable to create team."
+          )
+        );
+      }
+
+      resetForm();
+
+      await loadTeams();
+
+      showMessage(
+        isEditing
+          ? "Team updated successfully."
+          : "Team created successfully."
+      );
+    } catch (error) {
+      showMessage(
+        error instanceof Error
+          ? error.message
+          : "Unable to save team.",
+        "error"
+      );
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function deleteTeam(team: Team) {
+    if (deletingId !== null) return;
+
+    const confirmed = window.confirm(
+      `Delete "${team.name}"?\n\nThis may affect tournament registrations and associated matches. This action cannot be undone.`
+    );
+
+    if (!confirmed) return;
+
+    setDeletingId(team.id);
     setMessage("");
 
     try {
       const csrfToken = await getCsrfToken();
 
-      if (!csrfToken) {
-        setMessage(
-          "CSRF token missing. Please refresh the page and try again."
-        );
-        return;
-      }
-
       const response = await fetch(
-        `${API_BASE_URL}/admin/teams/${id}/`,
+        `${API_BASE_URL}/admin/teams/${team.id}/`,
         {
           method: "DELETE",
           credentials: "include",
@@ -178,541 +290,364 @@ export default function AdminTeamsPage() {
       );
 
       if (!response.ok) {
-        let data: any = {};
+        const data = await response.json().catch(() => ({}));
 
-        try {
-          data = await response.json();
-        } catch {
-          // No JSON response.
-        }
-
-        setMessage(
-          data.detail ||
-            "Unable to delete team."
+        throw new Error(
+          getApiError(data, "Unable to delete team.")
         );
-
-        return;
       }
 
-      setMessage("Team deleted.");
+      if (editingId === team.id) {
+        resetForm();
+      }
 
       await loadTeams();
-    } catch (error) {
-      console.error("DELETE TEAM ERROR:", error);
 
-      setMessage(
+      showMessage("Team deleted successfully.");
+    } catch (error) {
+      showMessage(
         error instanceof Error
           ? error.message
-          : "Unable to connect to the backend."
+          : "Unable to delete team.",
+        "error"
       );
+    } finally {
+      setDeletingId(null);
     }
   }
 
+  const teamsWithLogos = teams.filter(
+    (team) => Boolean(team.logo)
+  ).length;
+
   return (
-    <main className="admin-page">
-      <div className="admin-page-header">
-        <div>
-          <p className="eyebrow">TOURNAMENT ADMIN</p>
+    <main className="min-h-screen bg-slate-950 text-white">
+      <div className="mx-auto max-w-7xl px-5 py-10 sm:px-8">
+        {/* Header */}
 
-          <h1>Teams</h1>
+        <header className="mb-9">
+          <Link
+            href="/admin"
+            className="text-sm font-medium text-blue-400 transition hover:text-blue-300"
+          >
+            ← Admin Dashboard
+          </Link>
 
-          <p className="subtitle">
-            Create and manage teams participating in tournaments.
+          <p className="mt-7 text-xs font-bold uppercase tracking-[0.25em] text-blue-400">
+            Tournament Administration
           </p>
-        </div>
 
-        <div className="team-count">
-          <span>{teams.length}</span>
-          <small>Teams</small>
-        </div>
-      </div>
+          <h1 className="mt-3 text-4xl font-bold tracking-tight">
+            Team Management
+          </h1>
 
-      {message && (
-        <div className="admin-message">
-          {message}
-        </div>
-      )}
+          <p className="mt-3 text-sm text-slate-400">
+            Create, edit and manage participating football teams.
+          </p>
+        </header>
 
-      <section className="admin-card">
-        <div className="card-heading">
-          <div>
-            <h2>Create Team</h2>
+        {/* Summary */}
 
-            <p>
-              Add a football team to the tournament system.
+        <section className="mb-8 grid grid-cols-2 gap-4">
+          <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
+            <p className="text-sm text-slate-400">
+              Total Teams
+            </p>
+
+            <p className="mt-3 text-3xl font-bold">
+              {teams.length}
             </p>
           </div>
-        </div>
 
-        <form
-          onSubmit={createTeam}
-          className="team-form"
-        >
-          <div className="form-group">
-            <label>Team Name</label>
+          <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
+            <p className="text-sm text-slate-400">
+              Teams With Logos
+            </p>
 
-            <input
-              type="text"
-              placeholder="e.g. Islamabad United"
-              value={form.name}
-              onChange={(e) =>
-                setForm({
-                  ...form,
-                  name: e.target.value,
-                })
-              }
-              required
-            />
-          </div>
-
-          <div className="form-group">
-            <label>Short Code</label>
-
-            <input
-              type="text"
-              placeholder="e.g. ISL"
-              maxLength={10}
-              value={form.code}
-              onChange={(e) =>
-                setForm({
-                  ...form,
-                  code: e.target.value.toUpperCase(),
-                })
-              }
-              required
-            />
-          </div>
-
-          <div className="form-group full">
-            <label>Logo URL</label>
-
-            <input
-              type="url"
-              placeholder="https://example.com/logo.png"
-              value={form.logo}
-              onChange={(e) =>
-                setForm({
-                  ...form,
-                  logo: e.target.value,
-                })
-              }
-            />
-          </div>
-
-          <div className="form-actions">
-            <button
-              type="submit"
-              className="primary-button"
-            >
-              + Create Team
-            </button>
-          </div>
-        </form>
-      </section>
-
-      <section className="teams-section">
-        <div className="section-heading">
-          <div>
-            <h2>Existing Teams</h2>
-
-            <p>
-              Teams currently available in the system.
+            <p className="mt-3 text-3xl font-bold">
+              {teamsWithLogos}
             </p>
           </div>
-        </div>
+        </section>
 
-        {loading ? (
-          <div className="empty-state">
-            <div className="spinner" />
+        {/* Feedback */}
 
-            <p>Loading teams...</p>
-          </div>
-        ) : teams.length === 0 ? (
-          <div className="empty-state">
-            <div className="empty-icon">
-              ⚽
-            </div>
-
-            <h3>No teams yet</h3>
-
-            <p>
-              Create your first team using the form above.
-            </p>
-          </div>
-        ) : (
-          <div className="team-grid">
-            {teams.map((team) => (
-              <article
-                key={team.id}
-                className="team-card"
-              >
-                <div className="team-logo">
-                  {team.logo ? (
-                    <img
-                      src={team.logo}
-                      alt={`${team.name} logo`}
-                    />
-                  ) : (
-                    <span>
-                      {team.code.substring(0, 2)}
-                    </span>
-                  )}
-                </div>
-
-                <div className="team-info">
-                  <div className="team-card-top">
-                    <span className="team-code">
-                      {team.code}
-                    </span>
-
-                    <span className="team-id">
-                      #{team.id}
-                    </span>
-                  </div>
-
-                  <h3>{team.name}</h3>
-
-                  <p>
-                    {team.logo
-                      ? "Team logo configured"
-                      : "No logo configured"}
-                  </p>
-                </div>
-
-                <button
-                  className="danger-button"
-                  onClick={() =>
-                    deleteTeam(team.id)
-                  }
-                >
-                  Delete
-                </button>
-              </article>
-            ))}
+        {message && (
+          <div
+            role="alert"
+            className={`mb-7 rounded-xl border px-5 py-4 text-sm ${
+              messageType === "error"
+                ? "border-red-900 bg-red-950/40 text-red-300"
+                : "border-green-900 bg-green-950/30 text-green-300"
+            }`}
+          >
+            {message}
           </div>
         )}
-      </section>
 
-      <style jsx>{`
-        .admin-page {
-          min-height: 100vh;
-          padding: 40px;
-          background: #0f172a;
-          color: #e2e8f0;
-        }
+        {/* Create / Edit form */}
 
-        .admin-page-header {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          margin-bottom: 32px;
-        }
+        <section className="mb-11 rounded-3xl border border-slate-800 bg-slate-900 p-6 sm:p-8">
+          <div className="mb-7 flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <h2 className="text-2xl font-bold">
+                {editingId !== null
+                  ? `Edit Team #${editingId}`
+                  : "Create New Team"}
+              </h2>
 
-        .eyebrow {
-          margin: 0 0 8px;
-          font-size: 12px;
-          font-weight: 700;
-          letter-spacing: 1.5px;
-          color: #60a5fa;
-        }
+              <p className="mt-2 text-sm text-slate-400">
+                {editingId !== null
+                  ? "Update the selected football team."
+                  : "Add a new football team to the system."}
+              </p>
+            </div>
 
-        h1 {
-          margin: 0;
-          font-size: 36px;
-          color: white;
-        }
+            {editingId !== null && (
+              <button
+                type="button"
+                onClick={resetForm}
+                disabled={saving}
+                className="rounded-xl border border-slate-700 px-4 py-2 text-sm text-slate-300 transition hover:border-slate-500 hover:text-white disabled:opacity-50"
+              >
+                Cancel Editing
+              </button>
+            )}
+          </div>
 
-        .subtitle {
-          margin-top: 8px;
-          color: #94a3b8;
-        }
+          <form
+            onSubmit={handleSubmit}
+            className="grid gap-5 md:grid-cols-2"
+          >
+            <div>
+              <label htmlFor="team-name" className={labelClass}>
+                Team Name
+              </label>
 
-        .team-count {
-          min-width: 100px;
-          padding: 16px 22px;
-          border: 1px solid #334155;
-          border-radius: 14px;
-          background: #111c32;
-          text-align: center;
-        }
+              <input
+                id="team-name"
+                type="text"
+                value={form.name}
+                onChange={(e) =>
+                  setForm((current) => ({
+                    ...current,
+                    name: e.target.value,
+                  }))
+                }
+                placeholder="e.g. Islamabad United"
+                className={inputClass}
+                required
+              />
+            </div>
 
-        .team-count span {
-          display: block;
-          font-size: 28px;
-          font-weight: 700;
-          color: #60a5fa;
-        }
+            <div>
+              <label htmlFor="team-code" className={labelClass}>
+                Short Code
+              </label>
 
-        .team-count small {
-          color: #94a3b8;
-        }
+              <input
+                id="team-code"
+                type="text"
+                maxLength={10}
+                value={form.code}
+                onChange={(e) =>
+                  setForm((current) => ({
+                    ...current,
+                    code: e.target.value.toUpperCase(),
+                  }))
+                }
+                placeholder="e.g. ISL"
+                className={inputClass}
+                required
+              />
+            </div>
 
-        .admin-message {
-          margin-bottom: 24px;
-          padding: 14px 18px;
-          border-radius: 10px;
-          background: #172554;
-          border: 1px solid #1d4ed8;
-          color: #bfdbfe;
-        }
+            <div className="md:col-span-2">
+              <label htmlFor="team-logo" className={labelClass}>
+                Logo URL
+                <span className="ml-2 font-normal text-slate-500">
+                  (Optional)
+                </span>
+              </label>
 
-        .admin-card {
-          background: #111c32;
-          border: 1px solid #263449;
-          border-radius: 18px;
-          padding: 28px;
-          margin-bottom: 42px;
-        }
+              <input
+                id="team-logo"
+                type="url"
+                value={form.logo}
+                onChange={(e) =>
+                  setForm((current) => ({
+                    ...current,
+                    logo: e.target.value,
+                  }))
+                }
+                placeholder="https://example.com/logo.png"
+                className={inputClass}
+              />
 
-        .card-heading h2,
-        .section-heading h2 {
-          margin: 0;
-          color: white;
-          font-size: 22px;
-        }
+              <p className="mt-2 text-xs text-slate-500">
+                Leave blank to display the team&apos;s short code
+                instead of a logo.
+              </p>
+            </div>
 
-        .card-heading p,
-        .section-heading p {
-          margin: 6px 0 0;
-          color: #64748b;
-        }
+            {/* Logo preview */}
 
-        .team-form {
-          display: grid;
-          grid-template-columns: 2fr 1fr;
-          gap: 20px;
-          margin-top: 26px;
-        }
+            {form.logo.trim() && (
+              <div className="md:col-span-2">
+                <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Logo Preview
+                </p>
 
-        .form-group {
-          display: flex;
-          flex-direction: column;
-          gap: 8px;
-        }
+                <div className="flex h-20 w-20 items-center justify-center overflow-hidden rounded-2xl border border-slate-700 bg-slate-950 p-2">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={form.logo.trim()}
+                    alt="Team logo preview"
+                    className="h-full w-full object-contain"
+                  />
+                </div>
+              </div>
+            )}
 
-        .form-group.full {
-          grid-column: 1 / -1;
-        }
+            <div className="md:col-span-2">
+              <button
+                type="submit"
+                disabled={saving}
+                className="w-full rounded-xl bg-blue-600 px-5 py-3 font-semibold text-white transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {saving
+                  ? "Saving..."
+                  : editingId !== null
+                    ? "Save Changes"
+                    : "+ Create Team"}
+              </button>
+            </div>
+          </form>
+        </section>
 
-        label {
-          font-size: 13px;
-          font-weight: 600;
-          color: #cbd5e1;
-        }
+        {/* Existing Teams */}
 
-        input {
-          width: 100%;
-          box-sizing: border-box;
-          border: 1px solid #334155;
-          border-radius: 10px;
-          background: #0f172a;
-          color: white;
-          padding: 13px 14px;
-          font-size: 14px;
-          outline: none;
-        }
+        <section>
+          <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
+            <div>
+              <h2 className="text-2xl font-bold">
+                Existing Teams
+              </h2>
 
-        input:focus {
-          border-color: #3b82f6;
-        }
+              <p className="mt-2 text-sm text-slate-400">
+                Teams currently available in the system.
+              </p>
+            </div>
 
-        .form-actions {
-          grid-column: 1 / -1;
-        }
+            <button
+              type="button"
+              onClick={() => void loadTeams()}
+              disabled={loading}
+              className="rounded-xl border border-slate-700 bg-slate-900 px-5 py-2.5 text-sm font-medium text-slate-300 transition hover:border-blue-500 hover:text-white disabled:opacity-50"
+            >
+              {loading ? "Loading..." : "Refresh"}
+            </button>
+          </div>
 
-        .primary-button {
-          width: 100%;
-          padding: 13px 18px;
-          border: none;
-          border-radius: 10px;
-          background: #2563eb;
-          color: white;
-          font-weight: 700;
-          cursor: pointer;
-        }
+          {loading ? (
+            <div className="rounded-3xl border border-slate-800 bg-slate-900 py-16 text-center">
+              <div className="mx-auto h-9 w-9 animate-spin rounded-full border-4 border-slate-700 border-t-blue-500" />
 
-        .primary-button:hover {
-          background: #1d4ed8;
-        }
+              <p className="mt-5 text-sm text-slate-400">
+                Loading football teams...
+              </p>
+            </div>
+          ) : teams.length === 0 ? (
+            <div className="rounded-3xl border border-dashed border-slate-700 bg-slate-900 px-6 py-16 text-center">
+              <div className="text-5xl">⚽</div>
 
-        .section-heading {
-          margin-bottom: 18px;
-        }
+              <h3 className="mt-5 text-xl font-semibold">
+                No teams yet
+              </h3>
 
-        .team-grid {
-          display: grid;
-          grid-template-columns: repeat(
-            auto-fit,
-            minmax(320px, 1fr)
-          );
-          gap: 20px;
-        }
+              <p className="mt-3 text-sm text-slate-400">
+                Create your first team using the form above.
+              </p>
+            </div>
+          ) : (
+            <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
+              {teams.map((team) => (
+                <article
+                  key={team.id}
+                  className="rounded-2xl border border-slate-800 bg-slate-900 p-6 transition hover:border-slate-600"
+                >
+                  <div className="flex items-center gap-4">
+                    {/* Logo */}
 
-        .team-card {
-          display: flex;
-          align-items: center;
-          gap: 16px;
-          padding: 20px;
-          border: 1px solid #263449;
-          border-radius: 16px;
-          background: #111c32;
-          transition:
-            transform 0.15s ease,
-            border-color 0.15s ease;
-        }
+                    <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-slate-700 bg-slate-950 p-2">
+                      {team.logo ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={team.logo}
+                          alt={`${team.name} logo`}
+                          className="h-full w-full object-contain"
+                        />
+                      ) : (
+                        <span className="text-xl font-extrabold text-blue-400">
+                          {team.code.substring(0, 2)}
+                        </span>
+                      )}
+                    </div>
 
-        .team-card:hover {
-          transform: translateY(-2px);
-          border-color: #3b82f6;
-        }
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="rounded-lg border border-blue-900 bg-blue-950/40 px-2.5 py-1 text-xs font-bold tracking-wider text-blue-300">
+                          {team.code}
+                        </span>
 
-        .team-logo {
-          width: 64px;
-          height: 64px;
-          flex-shrink: 0;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          overflow: hidden;
-          border-radius: 14px;
-          border: 1px solid #334155;
-          background: #0f172a;
-        }
+                        <span className="text-xs text-slate-500">
+                          #{team.id}
+                        </span>
+                      </div>
 
-        .team-logo img {
-          width: 100%;
-          height: 100%;
-          object-fit: contain;
-        }
+                      <h3 className="mt-3 truncate text-lg font-bold">
+                        {team.name}
+                      </h3>
 
-        .team-logo span {
-          font-size: 18px;
-          font-weight: 800;
-          color: #60a5fa;
-        }
+                      <p className="mt-1 text-xs text-slate-500">
+                        {team.logo
+                          ? "Team logo configured"
+                          : "No logo configured"}
+                      </p>
+                    </div>
+                  </div>
 
-        .team-info {
-          flex: 1;
-          min-width: 0;
-        }
+                  <div className="mt-6 flex gap-3 border-t border-slate-800 pt-5">
+                    <button
+                      type="button"
+                      onClick={() => beginEditing(team)}
+                      disabled={saving || deletingId !== null}
+                      className="flex-1 rounded-xl border border-blue-800 bg-blue-950/30 px-4 py-2.5 text-sm font-semibold text-blue-300 transition hover:bg-blue-900/40 disabled:opacity-50"
+                    >
+                      Edit
+                    </button>
 
-        .team-card-top {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-        }
+                    <button
+                      type="button"
+                      onClick={() => void deleteTeam(team)}
+                      disabled={saving || deletingId !== null}
+                      className="flex-1 rounded-xl border border-red-900 bg-red-950/20 px-4 py-2.5 text-sm font-semibold text-red-300 transition hover:bg-red-950/50 disabled:opacity-50"
+                    >
+                      {deletingId === team.id
+                        ? "Deleting..."
+                        : "Delete"}
+                    </button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
+        </section>
 
-        .team-code {
-          padding: 4px 8px;
-          border-radius: 6px;
-          background: #172554;
-          color: #93c5fd;
-          font-size: 11px;
-          font-weight: 800;
-          letter-spacing: 0.5px;
-        }
-
-        .team-id {
-          color: #64748b;
-          font-size: 11px;
-        }
-
-        .team-info h3 {
-          margin: 8px 0 4px;
-          color: white;
-          font-size: 18px;
-        }
-
-        .team-info p {
-          margin: 0;
-          color: #64748b;
-          font-size: 12px;
-        }
-
-        .danger-button {
-          flex-shrink: 0;
-          padding: 8px 12px;
-          border: 1px solid #7f1d1d;
-          border-radius: 8px;
-          background: transparent;
-          color: #fca5a5;
-          cursor: pointer;
-        }
-
-        .danger-button:hover {
-          background: #450a0a;
-        }
-
-        .empty-state {
-          padding: 60px 20px;
-          text-align: center;
-          border: 1px dashed #334155;
-          border-radius: 16px;
-          color: #64748b;
-        }
-
-        .empty-icon {
-          margin-bottom: 12px;
-          font-size: 42px;
-        }
-
-        .empty-state h3 {
-          margin: 0 0 8px;
-          color: #cbd5e1;
-        }
-
-        .empty-state p {
-          margin: 0;
-        }
-
-        .spinner {
-          width: 28px;
-          height: 28px;
-          margin: 0 auto 14px;
-          border: 3px solid #334155;
-          border-top-color: #3b82f6;
-          border-radius: 50%;
-          animation: spin 0.8s linear infinite;
-        }
-
-        @keyframes spin {
-          to {
-            transform: rotate(360deg);
-          }
-        }
-
-        @media (max-width: 700px) {
-          .admin-page {
-            padding: 22px;
-          }
-
-          .admin-page-header {
-            align-items: flex-start;
-            gap: 20px;
-          }
-
-          .team-form {
-            grid-template-columns: 1fr;
-          }
-
-          .form-group.full {
-            grid-column: auto;
-          }
-
-          .form-actions {
-            grid-column: auto;
-          }
-
-          .team-card {
-            align-items: flex-start;
-          }
-
-          .danger-button {
-            align-self: center;
-          }
-        }
-      `}</style>
+        <footer className="mt-12 border-t border-slate-800 pt-6 text-center text-xs text-slate-500">
+          Football Tournament Management System · Team Administration
+        </footer>
+      </div>
     </main>
   );
 }
-

@@ -6,7 +6,7 @@ from rest_framework.decorators import action
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import AllowAny, IsAdminUser
 from rest_framework.response import Response
-from django.contrib.auth import authenticate, login
+from django.contrib.auth import authenticate, login , logout
 from django.views.decorators.csrf import ensure_csrf_cookie
 
 from rest_framework.decorators import api_view, permission_classes
@@ -407,3 +407,38 @@ def login_view(request):
 @ensure_csrf_cookie
 def csrf_view(request):
     return Response({"detail": "CSRF cookie set."})
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def me_view(request):
+    user = request.user
+
+    if not user.is_authenticated:
+        return Response(
+            {
+                "authenticated": False,
+                "detail": "Not authenticated.",
+            },
+            status=status.HTTP_401_UNAUTHORIZED,
+        )
+
+    return Response(
+        {
+            "authenticated": True,
+            "id": user.id,
+            "username": user.username,
+            "is_staff": user.is_staff,
+            "is_superuser": user.is_superuser,
+        }
+    )
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def logout_view(request):
+    logout(request)
+
+    return Response(
+        {"detail": "Logged out successfully."},
+        status=status.HTTP_200_OK,
+    )

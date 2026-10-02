@@ -1,8 +1,9 @@
 
 "use client";
 
-import { useEffect, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import Link from "next/link";
+import { useParams } from "next/navigation";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
@@ -30,19 +31,24 @@ interface Match {
 
 interface EventTeam {
   id: number;
+  event_id?: number;
   team_id: number;
   team: Team;
 }
 
+type MatchEventType =
+  | "goal"
+  | "yellow_card"
+  | "red_card"
+  | "penalty_kick"
+  | "reward";
+
+type OtherEventType = Exclude<MatchEventType, "goal">;
+
 interface MatchEvent {
   id: number;
   team: number;
-  type:
-    | "goal"
-    | "yellow_card"
-    | "red_card"
-    | "penalty_kick"
-    | "reward";
+  type: MatchEventType;
   player_name: string;
   minute: number;
   points: number;
@@ -50,8 +56,65 @@ interface MatchEvent {
   created_at: string;
 }
 
-async function readJson(response: Response) {
+interface MatchUpdate {
+  type?: string;
+  event?: string;
+  match_id?: number;
+  status?: Match["status"];
+  home_score?: number;
+  away_score?: number;
+  match_event?: {
+    id: number;
+    team_id: number;
+    type: MatchEventType;
+    player_name: string;
+    minute: number;
+    points: number;
+    note: string;
+  };
+}
+
+const inputClass =
+  "w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm text-white outline-none transition placeholder:text-slate-500 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 disabled:cursor-not-allowed disabled:opacity-40";
+
+const labelClass =
+  "mb-2 block text-xs font-bold uppercase tracking-wider text-slate-400";
+
+function getCookie(name: string): string | null {
+  for (const cookie of document.cookie.split(";")) {
+    const [key, ...value] = cookie.trim().split("=");
+
+    if (key === name) {
+      return decodeURIComponent(value.join("="));
+    }
+  }
+
+  return null;
+}
+
+async function getCsrfToken(): Promise<string> {
+  const response = await fetch(`${API_BASE_URL}/auth/csrf/`, {
+    method: "GET",
+    credentials: "include",
+  });
+
+  if (!response.ok) {
+    throw new Error("Unable to initialize CSRF protection.");
+  }
+
+  const token = getCookie("csrftoken");
+
+  if (!token) {
+    throw new Error("CSRF token was not found. Please refresh.");
+  }
+
+  return token;
+}
+
+async function readJson(response: Response): Promise<unknown> {
   const text = await response.text();
+
+  if (!text.trim()) return {};
 
   try {
     return JSON.parse(text);
@@ -62,27 +125,67 @@ async function readJson(response: Response) {
   }
 }
 
-async function getCsrfToken(): Promise<string> {
-  const response = await fetch(`${API_BASE_URL}/auth/csrf/`, {
-    credentials: "include",
-  });
+function apiError(data: unknown, fallback: string): string {
+  if (!data || typeof data !== "object") return fallback;
 
-  if (!response.ok) {
-    throw new Error("Unable to initialize CSRF protection.");
-  }
+  const record = data as Record<string, unknown>;
 
-  const csrfMatch = document.cookie.match(
-    /(?:^|;\s*)csrftoken=([^;]+)/
+  if (typeof record.detail === "string") return record.detail;
+  if (typeof record.error === "string") return record.error;
+
+  return (
+    Object.entries(record)
+      .map(([key, value]) => {
+        const message = Array.isArray(value)
+          ? value.join(", ")
+          : String(value);
+
+        return `${key}: ${message}`;
+      })
+      .join(" | ") || fallback
   );
-
-  if (!csrfMatch) {
-    throw new Error("CSRF token was not found.");
-  }
-
-  return decodeURIComponent(csrfMatch[1]);
 }
 
-function eventLabel(type: MatchEvent["type"]) {
+async function fetchAllPages<T>(initialUrl: string): Promise<T[]> {
+  const items: T[] = [];
+  let nextUrl: string | null = initialUrl;
+
+  while (nextUrl !== null) {
+    const currentUrl: string = nextUrl;
+
+    const response = await fetch(currentUrl, {
+      method: "GET",
+      credentials: "include",
+      cache: "no-store",
+    });
+
+    const data = await readJson(response);
+
+    if (!response.ok) {
+      throw new Error(apiError(data, "Unable to load records."));
+    }
+
+    if (Array.isArray(data)) {
+      items.push(...(data as T[]));
+      nextUrl = null;
+    } else {
+      const result = data as {
+        results?: T[];
+        next?: string | null;
+      };
+
+      items.push(...(result.results ?? []));
+
+      nextUrl = result.next
+        ? new URL(result.next, currentUrl).toString()
+        : null;
+    }
+  }
+
+  return items;
+}
+
+function eventLabel(type: MatchEventType): string {
   switch (type) {
     case "goal":
       return "Goal";
@@ -94,12 +197,10 @@ function eventLabel(type: MatchEvent["type"]) {
       return "Penalty Kick";
     case "reward":
       return "Reward";
-    default:
-      return type;
   }
 }
 
-function eventIcon(type: MatchEvent["type"]) {
+function eventIcon(type: MatchEventType): string {
   switch (type) {
     case "goal":
       return "⚽";
@@ -111,221 +212,325 @@ function eventIcon(type: MatchEvent["type"]) {
       return "🎯";
     case "reward":
       return "🏆";
-    default:
-      return "•";
   }
+}
+
+function eventStyle(type: MatchEventType): string {
+  switch (type) {
+    case "goal":
+      return "border-blue-800 bg-blue-950/40";
+    case "yellow_card":
+      return "border-yellow-900 bg-yellow-950/20";
+    case "red_card":
+      return "border-red-900 bg-red-950/20";
+    case "penalty_kick":
+      return "border-purple-900 bg-purple-950/20";
+    case "reward":
+      return "border-amber-900 bg-amber-950/20";
+  }
+}
+
+function formatDate(value: string | null): string {
+  if (!value) return "—";
+
+  const date = new Date(value);
+
+  return Number.isNaN(date.getTime())
+    ? "—"
+    : date.toLocaleString();
+}
+
+function validMinute(value: string): boolean {
+  if (value.trim() === "") return false;
+
+  const minute = Number(value);
+
+  return (
+    Number.isInteger(minute) &&
+    minute >= 0 &&
+    minute <= 120
+  );
 }
 
 export default function MatchControlPage() {
   const params = useParams();
-  const router = useRouter();
 
-  const matchId = params.id;
+  const matchId = String(params.id ?? "");
 
   const [match, setMatch] = useState<Match | null>(null);
   const [events, setEvents] = useState<MatchEvent[]>([]);
   const [eventTeams, setEventTeams] = useState<EventTeam[]>([]);
 
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
+
   const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+
   const [socketConnected, setSocketConnected] = useState(false);
+
+  // Goal form
 
   const [goalTeam, setGoalTeam] = useState("");
   const [goalPlayer, setGoalPlayer] = useState("");
   const [goalMinute, setGoalMinute] = useState("");
 
+  // Other event form
+
   const [eventTeam, setEventTeam] = useState("");
-  const [eventType, setEventType] = useState<
-    "yellow_card" | "red_card" | "penalty_kick" | "reward"
-  >("yellow_card");
+  const [eventType, setEventType] =
+    useState<OtherEventType>("yellow_card");
+
   const [eventPlayer, setEventPlayer] = useState("");
   const [eventMinute, setEventMinute] = useState("");
   const [eventPoints, setEventPoints] = useState("");
   const [eventNote, setEventNote] = useState("");
 
-  async function loadMatch() {
-    const response = await fetch(
-      `${API_BASE_URL}/admin/matches/${matchId}/`,
-      {
-        credentials: "include",
+  const refresh = useCallback(
+    async (showLoading = false) => {
+      if (!matchId) return;
+
+      if (showLoading) setRefreshing(true);
+
+      try {
+        const matchResponse = await fetch(
+          `${API_BASE_URL}/admin/matches/${matchId}/`,
+          {
+            method: "GET",
+            credentials: "include",
+            cache: "no-store",
+          }
+        );
+
+        const matchData = await readJson(matchResponse);
+
+        if (!matchResponse.ok) {
+          throw new Error(
+            apiError(matchData, "Unable to load match.")
+          );
+        }
+
+        const loadedMatch = matchData as Match;
+
+        const [loadedEvents, roundResponse] = await Promise.all([
+          fetchAllPages<MatchEvent>(
+            `${API_BASE_URL}/matches/${matchId}/events/`
+          ),
+
+          fetch(
+            `${API_BASE_URL}/admin/rounds/${loadedMatch.round}/`,
+            {
+              method: "GET",
+              credentials: "include",
+              cache: "no-store",
+            }
+          ),
+        ]);
+
+        if (!roundResponse.ok) {
+          throw new Error("Unable to load the match round.");
+        }
+
+        const roundData = (await readJson(roundResponse)) as {
+          id: number;
+          event: number;
+        };
+
+        const registrations = await fetchAllPages<EventTeam>(
+          `${API_BASE_URL}/admin/event-teams/?event_id=${roundData.event}`
+        );
+
+        setMatch(loadedMatch);
+        setEvents(loadedEvents);
+
+        setEventTeams(
+          registrations.filter(
+            (item) =>
+              item.event_id === undefined ||
+              item.event_id === roundData.event
+          )
+        );
+      } catch (err) {
+        setError(
+          err instanceof Error
+            ? err.message
+            : "Unable to refresh match."
+        );
+      } finally {
+        setLoading(false);
+        setRefreshing(false);
       }
-    );
+    },
+    [matchId]
+  );
 
-    if (!response.ok) {
-      throw new Error("Unable to load match.");
-    }
-
-    return readJson(response);
-  }
-
-  async function loadEvents() {
-    const response = await fetch(
-      `${API_BASE_URL}/matches/${matchId}/events/`,
-      {
-        credentials: "include",
-      }
-    );
-
-    if (!response.ok) {
-      throw new Error("Unable to load match events.");
-    }
-
-    return readJson(response);
-  }
-
-  async function loadEventTeams(roundId: number) {
-    const roundResponse = await fetch(
-      `${API_BASE_URL}/admin/rounds/${roundId}/`,
-      {
-        credentials: "include",
-      }
-    );
-
-    if (!roundResponse.ok) {
-      return [];
-    }
-
-    const round = await readJson(roundResponse);
-
-    const response = await fetch(
-      `${API_BASE_URL}/admin/event-teams/?event=${round.event}`,
-      {
-        credentials: "include",
-      }
-    );
-
-    if (!response.ok) {
-      return [];
-    }
-
-    const data = await readJson(response);
-
-    return data.results || data;
-  }
-
-  async function refresh() {
-    try {
-      setError("");
-
-      const loadedMatch = await loadMatch();
-      setMatch(loadedMatch);
-
-      const loadedEvents = await loadEvents();
-      setEvents(loadedEvents);
-
-      const teams = await loadEventTeams(loadedMatch.round);
-      setEventTeams(teams);
-    } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "Unable to load match."
-      );
-    } finally {
-      setLoading(false);
-    }
-  }
+  // Initial load and realtime connection
 
   useEffect(() => {
-    refresh();
+    let active = true;
+    let socket: WebSocket | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
-    const socket = new WebSocket(
-      `ws://localhost:8000/ws/matches/${matchId}/`
-    );
+    void refresh();
 
-    socket.onopen = () => {
-      setSocketConnected(true);
-      console.log("Admin match WebSocket connected");
-    };
+    function connect() {
+      if (!active) return;
 
-    socket.onmessage = (message) => {
-      try {
-        const data = JSON.parse(message.data);
+      const protocol =
+        window.location.protocol === "https:" ? "wss:" : "ws:";
 
-        console.log("WebSocket update:", data);
+      const backendUrl = new URL(API_BASE_URL);
+      const socketUrl =
+        `${protocol}//${backendUrl.host}/ws/matches/${matchId}/`;
 
-        if (data.type === "connection") {
-          return;
-        }
+      socket = new WebSocket(socketUrl);
 
-        setMatch((currentMatch) => {
-          if (!currentMatch) {
-            return currentMatch;
+      socket.onopen = () => {
+        if (!active) return;
+
+        setSocketConnected(true);
+
+        // Recover any updates missed while disconnected.
+        void refresh();
+      };
+
+      socket.onmessage = (message) => {
+        if (!active) return;
+
+        try {
+          const data = JSON.parse(
+            message.data
+          ) as MatchUpdate;
+
+          if (data.type === "connection") return;
+
+          if (
+            data.match_id !== undefined &&
+            data.match_id !== Number(matchId)
+          ) {
+            return;
           }
 
-          return {
-            ...currentMatch,
-            status: data.status,
-            home_score: data.home_score,
-            away_score: data.away_score,
-          };
-        });
+          setMatch((current) => {
+            if (!current) return current;
 
-        if (data.match_event) {
-          setEvents((currentEvents) => {
-            const alreadyExists = currentEvents.some(
-              (event) => event.id === data.match_event.id
-            );
-
-            if (alreadyExists) {
-              return currentEvents;
-            }
-
-            return [
-              ...currentEvents,
-              {
-                id: data.match_event.id,
-                team: data.match_event.team_id,
-                type: data.match_event.type,
-                player_name: data.match_event.player_name,
-                minute: data.match_event.minute,
-                points: data.match_event.points,
-                note: data.match_event.note,
-                created_at: new Date().toISOString(),
-              },
-            ];
+            return {
+              ...current,
+              status: data.status ?? current.status,
+              home_score:
+                data.home_score ?? current.home_score,
+              away_score:
+                data.away_score ?? current.away_score,
+            };
           });
+
+          if (data.match_event) {
+            const incoming = data.match_event;
+
+            setEvents((current) => {
+              if (
+                current.some(
+                  (event) => event.id === incoming.id
+                )
+              ) {
+                return current;
+              }
+
+              return [
+                ...current,
+                {
+                  id: incoming.id,
+                  team: incoming.team_id,
+                  type: incoming.type,
+                  player_name: incoming.player_name,
+                  minute: incoming.minute,
+                  points: incoming.points,
+                  note: incoming.note,
+                  created_at: new Date().toISOString(),
+                },
+              ];
+            });
+          }
+
+          // Refresh lifecycle timestamps when a match
+          // starts or finishes.
+          if (
+            data.event === "match_started" ||
+            data.event === "match_finished"
+          ) {
+            void refresh();
+          }
+        } catch (err) {
+          console.error("WebSocket message error:", err);
         }
-      } catch (err) {
-        console.error("Invalid WebSocket message:", err);
-      }
-    };
+      };
 
-    socket.onclose = () => {
-      setSocketConnected(false);
-      console.log("Admin match WebSocket disconnected");
-    };
+      socket.onclose = () => {
+        if (!active) return;
 
-    socket.onerror = () => {
-      setSocketConnected(false);
-    };
+        setSocketConnected(false);
+
+        reconnectTimer = setTimeout(connect, 3000);
+      };
+
+      socket.onerror = () => {
+        if (!active) return;
+
+        setSocketConnected(false);
+      };
+    }
+
+    connect();
 
     return () => {
-      socket.close();
+      active = false;
+
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+      }
+
+      socket?.close();
     };
-  }, [matchId]);
+  }, [matchId, refresh]);
 
-  function teamName(teamId: number) {
-    const team = eventTeams.find(
-      (item) => item.team_id === teamId
-    );
+  const teamMap = useMemo(() => {
+    const map = new Map<number, Team>();
 
-    return team?.team?.name || `Team #${teamId}`;
+    for (const registration of eventTeams) {
+      map.set(registration.team_id, registration.team);
+    }
+
+    return map;
+  }, [eventTeams]);
+
+  const timeline = useMemo(
+    () =>
+      [...events].sort(
+        (a, b) =>
+          a.minute - b.minute ||
+          a.id - b.id
+      ),
+    [events]
+  );
+
+  function teamName(teamId: number): string {
+    return teamMap.get(teamId)?.name ?? `Team #${teamId}`;
   }
 
-  function teamCode(teamId: number) {
-    const team = eventTeams.find(
-      (item) => item.team_id === teamId
-    );
-
-    return team?.team?.code || "";
+  function teamCode(teamId: number): string {
+    return teamMap.get(teamId)?.code ?? "";
   }
 
   async function performAction(
     endpoint: string,
     body?: Record<string, unknown>
-  ) {
+  ): Promise<boolean> {
+    if (actionLoading) return false;
+
     setActionLoading(true);
     setError("");
+    setSuccess("");
 
     try {
       const csrfToken = await getCsrfToken();
@@ -339,7 +544,7 @@ export default function MatchControlPage() {
             "Content-Type": "application/json",
             "X-CSRFToken": csrfToken,
           },
-          body: JSON.stringify(body || {}),
+          body: JSON.stringify(body ?? {}),
         }
       );
 
@@ -347,18 +552,31 @@ export default function MatchControlPage() {
 
       if (!response.ok) {
         throw new Error(
-          data?.detail ||
-            data?.error ||
-            data?.non_field_errors?.[0] ||
-            "Action failed."
+          apiError(data, "Unable to perform match action.")
         );
       }
 
       await refresh();
+
+      setSuccess(
+        endpoint === "start"
+          ? "Match started successfully."
+          : endpoint === "finish"
+            ? "Match finished successfully."
+            : endpoint === "goal"
+              ? "Goal recorded successfully."
+              : "Match event recorded successfully."
+      );
+
+      return true;
     } catch (err) {
       setError(
-        err instanceof Error ? err.message : "Action failed."
+        err instanceof Error
+          ? err.message
+          : "Match action failed."
       );
+
+      return false;
     } finally {
       setActionLoading(false);
     }
@@ -369,57 +587,96 @@ export default function MatchControlPage() {
   }
 
   async function handleFinish() {
+    if (
+      !window.confirm(
+        "Finish this match? No further goals or match events can be added afterward."
+      )
+    ) {
+      return;
+    }
+
     await performAction("finish");
   }
 
   async function handleGoal() {
-    if (!goalTeam || !goalMinute) {
-      setError("Select a team and enter the goal minute.");
+    if (!goalTeam) {
+      setError("Please select the scoring team.");
       return;
     }
 
-    await performAction("goal", {
+    if (!validMinute(goalMinute)) {
+      setError("Goal minute must be between 0 and 120.");
+      return;
+    }
+
+    const successful = await performAction("goal", {
       team_id: Number(goalTeam),
+      player_name: goalPlayer.trim(),
       minute: Number(goalMinute),
-      player_name: goalPlayer,
     });
 
-    setGoalPlayer("");
-    setGoalMinute("");
+    if (successful) {
+      setGoalPlayer("");
+      setGoalMinute("");
+    }
   }
 
   async function handleEvent() {
-    if (!eventTeam || !eventMinute) {
-      setError("Select a team and enter the event minute.");
+    if (!eventTeam) {
+      setError("Please select a team.");
+      return;
+    }
+
+    if (!validMinute(eventMinute)) {
+      setError("Event minute must be between 0 and 120.");
+      return;
+    }
+
+    if (
+      eventType === "reward" &&
+      (!eventPoints.trim() ||
+        !Number.isInteger(Number(eventPoints)) ||
+        Number(eventPoints) <= 0)
+    ) {
+      setError("Reward points must be a positive whole number.");
+      return;
+    }
+
+    if (eventType === "reward" && !eventNote.trim()) {
+      setError("Please enter a reason for the reward.");
       return;
     }
 
     const body: Record<string, unknown> = {
       team_id: Number(eventTeam),
       event_type: eventType,
+      player_name: eventPlayer.trim(),
       minute: Number(eventMinute),
-      player_name: eventPlayer,
-      note: eventNote,
+      note: eventNote.trim(),
     };
 
     if (eventType === "reward") {
-      body.points = Number(eventPoints || 0);
+      body.points = Number(eventPoints);
     }
 
-    await performAction("event", body);
+    const successful = await performAction("event", body);
 
-    setEventPlayer("");
-    setEventMinute("");
-    setEventPoints("");
-    setEventNote("");
+    if (successful) {
+      setEventPlayer("");
+      setEventMinute("");
+      setEventPoints("");
+      setEventNote("");
+    }
   }
 
   if (loading) {
     return (
-      <main className="min-h-screen bg-slate-950 text-white">
-        <div className="mx-auto max-w-6xl px-6 py-10">
-          <p className="text-slate-400">
-            Loading match control...
+      <main className="flex min-h-screen items-center justify-center bg-slate-950 text-white">
+        <div className="text-center">
+          <div className="mx-auto h-11 w-11 animate-spin rounded-full border-4 border-slate-800 border-t-blue-500" />
+
+          <p className="mt-5 text-sm text-slate-400">
+            Loading match control room...
           </p>
         </div>
       </main>
@@ -428,23 +685,31 @@ export default function MatchControlPage() {
 
   if (!match) {
     return (
-      <main className="min-h-screen bg-slate-950 text-white">
-        <div className="mx-auto max-w-6xl px-6 py-10">
-          <button
-            onClick={() => router.push("/admin/matches")}
-            className="text-sm text-blue-400 hover:text-blue-300"
+      <main className="min-h-screen bg-slate-950 px-6 py-12 text-white">
+        <div className="mx-auto max-w-6xl">
+          <Link
+            href="/admin/matches"
+            className="text-sm font-medium text-blue-400 hover:text-blue-300"
           >
             ← Back to Matches
-          </button>
+          </Link>
 
           <div className="mt-8 rounded-3xl border border-red-900 bg-slate-900 p-8">
             <h1 className="text-2xl font-bold">
-              Match Control
+              Unable to Load Match
             </h1>
 
-            <p className="mt-3 text-red-300">
+            <p className="mt-3 text-sm text-red-300">
               {error || "Match not found."}
             </p>
+
+            <button
+              type="button"
+              onClick={() => void refresh(true)}
+              className="mt-6 rounded-xl bg-blue-600 px-5 py-3 text-sm font-semibold hover:bg-blue-500"
+            >
+              Try Again
+            </button>
           </div>
         </div>
       </main>
@@ -454,386 +719,617 @@ export default function MatchControlPage() {
   const homeTeam = teamName(match.home_team);
   const awayTeam = teamName(match.away_team);
 
-  const canStart = match.status === "scheduled";
-  const canAddEvents = match.status === "live";
-  const canFinish = match.status === "live";
+  const isScheduled = match.status === "scheduled";
+  const isLive = match.status === "live";
+  const isFinished = match.status === "finished";
+
+  const formDisabled = !isLive || actionLoading;
 
   return (
     <main className="min-h-screen bg-slate-950 text-white">
-      <div className="mx-auto max-w-6xl px-6 py-10">
-        <button
-          onClick={() => router.push("/admin/matches")}
-          className="mb-8 text-sm text-blue-400 hover:text-blue-300"
-        >
-          ← Back to Matches
-        </button>
+      <div className="mx-auto max-w-7xl px-5 py-9 sm:px-8">
+        {/* Navigation */}
 
-        <div className="mb-8 flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
-          <div>
-            <p className="text-sm uppercase tracking-widest text-blue-400">
-              Admin Match Control
-            </p>
-
-            <h1 className="mt-2 text-3xl font-bold">
-              {homeTeam} vs {awayTeam}
-            </h1>
-
-            <p className="mt-2 text-sm text-slate-500">
-              Match #{match.id}
-            </p>
-          </div>
+        <div className="mb-8 flex flex-wrap items-center justify-between gap-4">
+          <Link
+            href="/admin/matches"
+            className="text-sm font-semibold text-blue-400 transition hover:text-blue-300"
+          >
+            ← Back to Matches
+          </Link>
 
           <div className="flex items-center gap-3">
-            {socketConnected && (
-              <span className="rounded-full bg-green-950 px-3 py-2 text-xs font-semibold text-green-400">
-                ● Realtime connected
-              </span>
-            )}
-
             <span
-              className={`rounded-full px-4 py-2 text-sm font-semibold uppercase ${
-                match.status === "live"
-                  ? "bg-red-950 text-red-400"
-                  : match.status === "finished"
-                    ? "bg-slate-800 text-slate-300"
-                    : "bg-yellow-950 text-yellow-400"
+              className={`rounded-full border px-3 py-1.5 text-xs font-bold ${
+                socketConnected
+                  ? "border-green-900 bg-green-950/40 text-green-400"
+                  : "border-slate-700 bg-slate-900 text-slate-400"
               }`}
             >
-              {match.status}
+              {socketConnected
+                ? "● Realtime Connected"
+                : "○ Reconnecting..."}
             </span>
+
+            <button
+              type="button"
+              onClick={() => void refresh(true)}
+              disabled={refreshing}
+              className="rounded-xl border border-slate-700 px-4 py-2 text-xs font-semibold text-slate-300 hover:border-blue-500 disabled:opacity-50"
+            >
+              {refreshing ? "Refreshing..." : "↻ Refresh"}
+            </button>
           </div>
         </div>
 
+        {/* Page heading */}
+
+        <header className="mb-8">
+          <p className="text-xs font-bold uppercase tracking-[0.25em] text-blue-400">
+            Tournament Administration / Live Operations
+          </p>
+
+          <h1 className="mt-3 text-3xl font-extrabold tracking-tight sm:text-4xl">
+            Match Control Room
+          </h1>
+
+          <p className="mt-3 text-sm text-slate-400">
+            Match #{match.id} · {match.venue || "Venue not specified"}
+          </p>
+        </header>
+
+        {/* Feedback */}
+
         {error && (
-          <div className="mb-6 rounded-2xl border border-red-900 bg-red-950/40 p-4 text-red-300">
+          <div
+            role="alert"
+            className="mb-6 rounded-xl border border-red-900 bg-red-950/40 px-5 py-4 text-sm text-red-300"
+          >
             {error}
           </div>
         )}
 
-        <section className="rounded-3xl border border-slate-800 bg-slate-900 p-8">
-          <div className="text-center">
-            <p className="text-sm uppercase tracking-widest text-slate-500">
-              Live Scoreboard
-            </p>
+        {success && (
+          <div
+            role="status"
+            className="mb-6 rounded-xl border border-green-900 bg-green-950/30 px-5 py-4 text-sm text-green-300"
+          >
+            {success}
+          </div>
+        )}
 
-            <div className="mt-8 flex items-center justify-center gap-5 sm:gap-12">
-              <div className="flex-1 text-right">
-                <p className="text-lg font-semibold sm:text-2xl">
-                  {homeTeam}
-                </p>
+        {/* Scoreboard */}
 
-                <p className="mt-1 text-sm text-slate-500">
-                  {teamCode(match.home_team)}
-                </p>
+        <section className="overflow-hidden rounded-3xl border border-slate-800 bg-slate-900 shadow-2xl">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 px-6 py-5">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-widest text-slate-500">
+                Official Match Scoreboard
+              </p>
+
+              <p className="mt-2 text-xs text-slate-400">
+                {formatDate(match.scheduled_at)}
+              </p>
+            </div>
+
+            <span
+              className={`rounded-full border px-4 py-2 text-xs font-extrabold uppercase tracking-widest ${
+                isLive
+                  ? "border-red-800 bg-red-950/50 text-red-400"
+                  : isFinished
+                    ? "border-green-900 bg-green-950/40 text-green-400"
+                    : "border-amber-900 bg-amber-950/30 text-amber-400"
+              }`}
+            >
+              {isLive
+                ? "● Live"
+                : isFinished
+                  ? "Full Time"
+                  : "Scheduled"}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2 px-4 py-12 sm:gap-8 sm:px-12">
+            {/* Home */}
+
+            <div className="min-w-0 text-center">
+              <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl border border-blue-800 bg-blue-950/40 text-xl font-extrabold text-blue-300 sm:h-20 sm:w-20 sm:text-2xl">
+                {teamCode(match.home_team).slice(0, 3) || "H"}
               </div>
 
-              <div className="shrink-0">
-                <p className="text-5xl font-bold sm:text-6xl">
-                  {match.home_score} - {match.away_score}
-                </p>
+              <h2 className="mt-5 break-words text-sm font-bold sm:text-xl">
+                {homeTeam}
+              </h2>
+
+              <p className="mt-2 text-xs uppercase tracking-wider text-slate-500">
+                Home
+              </p>
+            </div>
+
+            {/* Score */}
+
+            <div className="text-center">
+              <p className="text-xs font-bold uppercase tracking-widest text-slate-500">
+                {isFinished
+                  ? "FT"
+                  : isLive
+                    ? "LIVE"
+                    : "VS"}
+              </p>
+
+              <div className="mt-3 whitespace-nowrap text-4xl font-black tabular-nums tracking-tight sm:text-7xl">
+                {match.home_score}
+                <span className="mx-2 text-slate-600 sm:mx-4">
+                  :
+                </span>
+                {match.away_score}
               </div>
 
-              <div className="flex-1 text-left">
-                <p className="text-lg font-semibold sm:text-2xl">
-                  {awayTeam}
-                </p>
+              <p className="mt-4 text-xs text-slate-500">
+                Match #{match.id}
+              </p>
+            </div>
 
-                <p className="mt-1 text-sm text-slate-500">
-                  {teamCode(match.away_team)}
-                </p>
+            {/* Away */}
+
+            <div className="min-w-0 text-center">
+              <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl border border-purple-800 bg-purple-950/40 text-xl font-extrabold text-purple-300 sm:h-20 sm:w-20 sm:text-2xl">
+                {teamCode(match.away_team).slice(0, 3) || "A"}
               </div>
+
+              <h2 className="mt-5 break-words text-sm font-bold sm:text-xl">
+                {awayTeam}
+              </h2>
+
+              <p className="mt-2 text-xs uppercase tracking-wider text-slate-500">
+                Away
+              </p>
             </div>
           </div>
 
-          <div className="mt-8 flex flex-wrap justify-center gap-3 border-t border-slate-800 pt-6">
-            {canStart && (
-              <button
-                disabled={actionLoading}
-                onClick={handleStart}
-                className="rounded-xl bg-green-600 px-6 py-3 font-semibold transition hover:bg-green-500 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {actionLoading ? "Processing..." : "▶ Start Match"}
-              </button>
-            )}
+          {/* Match lifecycle controls */}
 
-            {canFinish && (
-              <button
-                disabled={actionLoading}
-                onClick={handleFinish}
-                className="rounded-xl bg-red-600 px-6 py-3 font-semibold transition hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {actionLoading ? "Processing..." : "⏹ Finish Match"}
-              </button>
-            )}
+          <div className="border-t border-slate-800 bg-slate-950/50 px-6 py-6">
+            <div className="flex flex-wrap items-center justify-center gap-4">
+              {isScheduled && (
+                <button
+                  type="button"
+                  onClick={() => void handleStart()}
+                  disabled={actionLoading}
+                  className="rounded-xl bg-green-600 px-8 py-3 text-sm font-bold transition hover:bg-green-500 disabled:opacity-50"
+                >
+                  {actionLoading
+                    ? "Processing..."
+                    : "▶ Start Match"}
+                </button>
+              )}
 
-            {match.status === "finished" && (
-              <span className="rounded-xl bg-slate-800 px-6 py-3 text-sm font-semibold text-slate-400">
-                Match finished
+              {isLive && (
+                <button
+                  type="button"
+                  onClick={() => void handleFinish()}
+                  disabled={actionLoading}
+                  className="rounded-xl bg-red-600 px-8 py-3 text-sm font-bold transition hover:bg-red-500 disabled:opacity-50"
+                >
+                  {actionLoading
+                    ? "Processing..."
+                    : "■ Finish Match"}
+                </button>
+              )}
+
+              {isFinished && (
+                <span className="rounded-xl border border-green-900 bg-green-950/30 px-6 py-3 text-sm font-semibold text-green-300">
+                  ✓ Match Completed
+                </span>
+              )}
+
+              <Link
+                href={`/matches/${match.id}`}
+                className="rounded-xl border border-slate-700 px-6 py-3 text-sm font-semibold text-slate-300 transition hover:border-blue-500 hover:text-white"
+              >
+                Public Match View ↗
+              </Link>
+            </div>
+
+            <div className="mt-5 flex flex-wrap justify-center gap-x-8 gap-y-2 text-xs text-slate-500">
+              <span>
+                Started: {formatDate(match.started_at)}
               </span>
-            )}
+
+              <span>
+                Finished: {formatDate(match.ended_at)}
+              </span>
+            </div>
           </div>
         </section>
 
-        <div className="mt-6 grid gap-6 lg:grid-cols-2">
-          <section className="rounded-3xl border border-slate-800 bg-slate-900 p-6">
-            <div className="mb-5">
-              <p className="text-sm uppercase tracking-widest text-blue-400">
-                Live Action
-              </p>
+        {/* Main control area */}
 
-              <h2 className="mt-1 text-2xl font-semibold">
-                Add Goal
-              </h2>
+        <div className="mt-7 grid items-start gap-7 xl:grid-cols-[1fr_0.85fr]">
+          {/* Left column: action forms */}
 
-              {!canAddEvents && (
-                <p className="mt-2 text-sm text-slate-500">
-                  Start the match before recording events.
+          <div className="space-y-7">
+            {/* Goal control */}
+
+            <section className="rounded-3xl border border-slate-800 bg-slate-900 p-6 sm:p-7">
+              <div className="mb-7 flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-widest text-blue-400">
+                    Scoring Control
+                  </p>
+
+                  <h2 className="mt-2 text-2xl font-bold">
+                    ⚽ Record Goal
+                  </h2>
+
+                  <p className="mt-2 text-sm text-slate-400">
+                    Goals update the scoreboard in realtime.
+                  </p>
+                </div>
+              </div>
+
+              {!isLive && (
+                <div className="mb-6 rounded-xl border border-slate-800 bg-slate-950 px-4 py-3 text-xs text-slate-400">
+                  {isFinished
+                    ? "This match is finished. Goal recording is closed."
+                    : "Start the match to enable goal recording."}
+                </div>
+              )}
+
+              <div className="space-y-5">
+                <div>
+                  <label className={labelClass}>
+                    Scoring Team
+                  </label>
+
+                  <select
+                    value={goalTeam}
+                    onChange={(event) =>
+                      setGoalTeam(event.target.value)
+                    }
+                    disabled={formDisabled}
+                    className={inputClass}
+                  >
+                    <option value="">Select team</option>
+
+                    <option value={match.home_team}>
+                      {homeTeam} (Home)
+                    </option>
+
+                    <option value={match.away_team}>
+                      {awayTeam} (Away)
+                    </option>
+                  </select>
+                </div>
+
+                <div className="grid gap-4 sm:grid-cols-[2fr_1fr]">
+                  <div>
+                    <label className={labelClass}>
+                      Player Name
+                    </label>
+
+                    <input
+                      type="text"
+                      value={goalPlayer}
+                      onChange={(event) =>
+                        setGoalPlayer(event.target.value)
+                      }
+                      placeholder="Goal scorer"
+                      disabled={formDisabled}
+                      className={inputClass}
+                    />
+                  </div>
+
+                  <div>
+                    <label className={labelClass}>
+                      Minute
+                    </label>
+
+                    <input
+                      type="number"
+                      min="0"
+                      max="120"
+                      step="1"
+                      value={goalMinute}
+                      onChange={(event) =>
+                        setGoalMinute(event.target.value)
+                      }
+                      placeholder="45"
+                      disabled={formDisabled}
+                      className={inputClass}
+                    />
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => void handleGoal()}
+                  disabled={formDisabled}
+                  className="w-full rounded-xl bg-blue-600 px-6 py-3.5 text-sm font-bold transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {actionLoading
+                    ? "Processing..."
+                    : "+ Add Goal"}
+                </button>
+              </div>
+            </section>
+
+            {/* Match events */}
+
+            <section className="rounded-3xl border border-slate-800 bg-slate-900 p-6 sm:p-7">
+              <div className="mb-7">
+                <p className="text-xs font-bold uppercase tracking-widest text-purple-400">
+                  Match Operations
                 </p>
-              )}
-            </div>
 
-            <div className="space-y-4">
-              <select
-                value={goalTeam}
-                onChange={(e) => setGoalTeam(e.target.value)}
-                disabled={!canAddEvents || actionLoading}
-                className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none focus:border-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                <option value="">Select team</option>
+                <h2 className="mt-2 text-2xl font-bold">
+                  Record Match Event
+                </h2>
 
-                <option value={match.home_team}>
-                  {homeTeam}
-                </option>
-
-                <option value={match.away_team}>
-                  {awayTeam}
-                </option>
-              </select>
-
-              <input
-                type="text"
-                placeholder="Player name"
-                value={goalPlayer}
-                onChange={(e) => setGoalPlayer(e.target.value)}
-                disabled={!canAddEvents || actionLoading}
-                className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none placeholder:text-slate-600 focus:border-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
-              />
-
-              <input
-                type="number"
-                min="0"
-                max="120"
-                placeholder="Minute"
-                value={goalMinute}
-                onChange={(e) => setGoalMinute(e.target.value)}
-                disabled={!canAddEvents || actionLoading}
-                className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none placeholder:text-slate-600 focus:border-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
-              />
-
-              <button
-                onClick={handleGoal}
-                disabled={!canAddEvents || actionLoading}
-                className="w-full rounded-xl bg-blue-600 px-5 py-3 font-semibold transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                ⚽ Add Goal
-              </button>
-            </div>
-          </section>
-
-          <section className="rounded-3xl border border-slate-800 bg-slate-900 p-6">
-            <div className="mb-5">
-              <p className="text-sm uppercase tracking-widest text-blue-400">
-                Live Action
-              </p>
-
-              <h2 className="mt-1 text-2xl font-semibold">
-                Add Match Event
-              </h2>
-
-              {!canAddEvents && (
-                <p className="mt-2 text-sm text-slate-500">
-                  Start the match before recording events.
+                <p className="mt-2 text-sm text-slate-400">
+                  Manage cards, penalty kicks and bonus rewards.
                 </p>
-              )}
+              </div>
+
+              <div className="space-y-5">
+                <div>
+                  <label className={labelClass}>
+                    Select Team
+                  </label>
+
+                  <select
+                    value={eventTeam}
+                    onChange={(event) =>
+                      setEventTeam(event.target.value)
+                    }
+                    disabled={formDisabled}
+                    className={inputClass}
+                  >
+                    <option value="">Select team</option>
+
+                    <option value={match.home_team}>
+                      {homeTeam}
+                    </option>
+
+                    <option value={match.away_team}>
+                      {awayTeam}
+                    </option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className={labelClass}>
+                    Event Type
+                  </label>
+
+                  <select
+                    value={eventType}
+                    onChange={(event) =>
+                      setEventType(
+                        event.target.value as OtherEventType
+                      )
+                    }
+                    disabled={formDisabled}
+                    className={inputClass}
+                  >
+                    <option value="yellow_card">
+                      🟨 Yellow Card
+                    </option>
+
+                    <option value="red_card">
+                      🟥 Red Card
+                    </option>
+
+                    <option value="penalty_kick">
+                      🎯 Penalty Kick
+                    </option>
+
+                    <option value="reward">
+                      🏆 Bonus Reward
+                    </option>
+                  </select>
+                </div>
+
+                <div className="grid gap-4 sm:grid-cols-[2fr_1fr]">
+                  <div>
+                    <label className={labelClass}>
+                      Player Name
+                    </label>
+
+                    <input
+                      type="text"
+                      value={eventPlayer}
+                      onChange={(event) =>
+                        setEventPlayer(event.target.value)
+                      }
+                      placeholder="Player name"
+                      disabled={formDisabled}
+                      className={inputClass}
+                    />
+                  </div>
+
+                  <div>
+                    <label className={labelClass}>
+                      Minute
+                    </label>
+
+                    <input
+                      type="number"
+                      min="0"
+                      max="120"
+                      step="1"
+                      value={eventMinute}
+                      onChange={(event) =>
+                        setEventMinute(event.target.value)
+                      }
+                      placeholder="60"
+                      disabled={formDisabled}
+                      className={inputClass}
+                    />
+                  </div>
+                </div>
+
+                {eventType === "reward" && (
+                  <div>
+                    <label className={labelClass}>
+                      Bonus Points
+                    </label>
+
+                    <input
+                      type="number"
+                      min="1"
+                      step="1"
+                      value={eventPoints}
+                      onChange={(event) =>
+                        setEventPoints(event.target.value)
+                      }
+                      placeholder="e.g. 2"
+                      disabled={formDisabled}
+                      className={inputClass}
+                    />
+                  </div>
+                )}
+
+                <div>
+                  <label className={labelClass}>
+                    {eventType === "reward"
+                      ? "Reward Reason"
+                      : "Additional Note"}
+                  </label>
+
+                  <textarea
+                    rows={3}
+                    value={eventNote}
+                    onChange={(event) =>
+                      setEventNote(event.target.value)
+                    }
+                    placeholder={
+                      eventType === "reward"
+                        ? "Why is this team receiving bonus points?"
+                        : "Optional event details"
+                    }
+                    disabled={formDisabled}
+                    className={inputClass}
+                  />
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => void handleEvent()}
+                  disabled={formDisabled}
+                  className="w-full rounded-xl bg-purple-600 px-6 py-3.5 text-sm font-bold transition hover:bg-purple-500 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {actionLoading
+                    ? "Processing..."
+                    : "+ Record Event"}
+                </button>
+              </div>
+            </section>
+          </div>
+
+          {/* Right column: realtime timeline */}
+
+          <section className="overflow-hidden rounded-3xl border border-slate-800 bg-slate-900">
+            <div className="border-b border-slate-800 px-6 py-6">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-widest text-blue-400">
+                    Live Match Feed
+                  </p>
+
+                  <h2 className="mt-2 text-2xl font-bold">
+                    Event Timeline
+                  </h2>
+                </div>
+
+                <span className="rounded-full border border-slate-700 bg-slate-950 px-3 py-1.5 text-xs font-bold text-slate-300">
+                  {timeline.length} Events
+                </span>
+              </div>
+
+              <p className="mt-3 text-xs text-slate-500">
+                Match events are displayed in chronological order.
+              </p>
             </div>
 
-            <div className="space-y-4">
-              <select
-                value={eventTeam}
-                onChange={(e) => setEventTeam(e.target.value)}
-                disabled={!canAddEvents || actionLoading}
-                className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none focus:border-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                <option value="">Select team</option>
+            {timeline.length === 0 ? (
+              <div className="px-6 py-20 text-center">
+                <div className="text-4xl">📋</div>
 
-                <option value={match.home_team}>
-                  {homeTeam}
-                </option>
+                <h3 className="mt-5 text-base font-semibold">
+                  No match activity yet
+                </h3>
 
-                <option value={match.away_team}>
-                  {awayTeam}
-                </option>
-              </select>
+                <p className="mt-2 text-sm text-slate-500">
+                  Goals, cards and rewards will appear here.
+                </p>
+              </div>
+            ) : (
+              <div className="max-h-[1000px] space-y-4 overflow-y-auto p-5">
+                {timeline.map((event) => (
+                  <article
+                    key={event.id}
+                    className={`flex items-start gap-4 rounded-2xl border p-4 ${eventStyle(
+                      event.type
+                    )}`}
+                  >
+                    <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-slate-950 text-xl">
+                      {eventIcon(event.type)}
+                    </div>
 
-              <select
-                value={eventType}
-                onChange={(e) =>
-                  setEventType(
-                    e.target.value as
-                      | "yellow_card"
-                      | "red_card"
-                      | "penalty_kick"
-                      | "reward"
-                  )
-                }
-                disabled={!canAddEvents || actionLoading}
-                className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none focus:border-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                <option value="yellow_card">
-                  🟨 Yellow Card
-                </option>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-sm font-bold">
+                          {eventLabel(event.type)}
+                        </span>
 
-                <option value="red_card">
-                  🟥 Red Card
-                </option>
+                        <span className="rounded-lg bg-slate-950 px-2.5 py-1 text-xs font-extrabold tabular-nums text-blue-300">
+                          {event.minute}&apos;
+                        </span>
+                      </div>
 
-                <option value="penalty_kick">
-                  🎯 Penalty Kick
-                </option>
+                      <p className="mt-2 text-sm font-medium text-slate-300">
+                        {teamName(event.team)}
+                      </p>
 
-                <option value="reward">
-                  🏆 Reward
-                </option>
-              </select>
+                      {event.player_name && (
+                        <p className="mt-1 text-xs text-slate-400">
+                          Player: {event.player_name}
+                        </p>
+                      )}
 
-              <input
-                type="text"
-                placeholder="Player name"
-                value={eventPlayer}
-                onChange={(e) => setEventPlayer(e.target.value)}
-                disabled={!canAddEvents || actionLoading}
-                className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none placeholder:text-slate-600 focus:border-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
-              />
+                      {event.note && (
+                        <p className="mt-2 break-words text-xs leading-relaxed text-slate-400">
+                          {event.note}
+                        </p>
+                      )}
 
-              <input
-                type="number"
-                min="0"
-                max="120"
-                placeholder="Minute"
-                value={eventMinute}
-                onChange={(e) => setEventMinute(e.target.value)}
-                disabled={!canAddEvents || actionLoading}
-                className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none placeholder:text-slate-600 focus:border-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
-              />
+                      {event.type === "reward" &&
+                        event.points !== 0 && (
+                          <p className="mt-3 text-sm font-bold text-amber-400">
+                            +{event.points} Bonus Points
+                          </p>
+                        )}
+                    </div>
+                  </article>
+                ))}
+              </div>
+            )}
 
-              {eventType === "reward" && (
-                <input
-                  type="number"
-                  placeholder="Bonus points"
-                  value={eventPoints}
-                  onChange={(e) => setEventPoints(e.target.value)}
-                  disabled={!canAddEvents || actionLoading}
-                  className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none placeholder:text-slate-600 focus:border-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
-                />
-              )}
-
-              <input
-                type="text"
-                placeholder="Reason / note"
-                value={eventNote}
-                onChange={(e) => setEventNote(e.target.value)}
-                disabled={!canAddEvents || actionLoading}
-                className="w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-white outline-none placeholder:text-slate-600 focus:border-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
-              />
-
-              <button
-                onClick={handleEvent}
-                disabled={!canAddEvents || actionLoading}
-                className="w-full rounded-xl bg-blue-600 px-5 py-3 font-semibold transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                Add Event
-              </button>
+            <div className="border-t border-slate-800 bg-slate-950/40 px-6 py-4">
+              <p className="text-center text-xs text-slate-500">
+                {socketConnected
+                  ? "● Receiving realtime match updates"
+                  : "Waiting for realtime connection..."}
+              </p>
             </div>
           </section>
         </div>
 
-        <section className="mt-6 rounded-3xl border border-slate-800 bg-slate-900 p-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm uppercase tracking-widest text-blue-400">
-                Match Activity
-              </p>
-
-              <h2 className="mt-1 text-2xl font-semibold">
-                Event Timeline
-              </h2>
-            </div>
-
-            {socketConnected && (
-              <span className="text-xs font-semibold text-green-400">
-                ● Realtime
-              </span>
-            )}
-          </div>
-
-          {events.length === 0 ? (
-            <div className="mt-6 rounded-2xl border border-slate-800 bg-slate-950 p-6 text-center">
-              <p className="text-slate-500">
-                No events recorded yet.
-              </p>
-            </div>
-          ) : (
-            <div className="mt-6 space-y-3">
-              {events.map((event) => (
-                <div
-                  key={event.id}
-                  className="flex items-start gap-4 rounded-2xl border border-slate-800 bg-slate-950 p-4"
-                >
-                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-slate-800">
-                    {eventIcon(event.type)}
-                  </div>
-
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-semibold">
-                        {eventLabel(event.type)}
-                      </span>
-
-                      <span className="text-sm text-blue-400">
-                        {event.minute}'
-                      </span>
-
-                      <span className="text-sm text-slate-500">
-                        {teamName(event.team)}
-                      </span>
-                    </div>
-
-                    {event.player_name && (
-                      <p className="mt-1 text-sm text-slate-300">
-                        {event.player_name}
-                      </p>
-                    )}
-
-                    {event.note && (
-                      <p className="mt-1 text-sm text-slate-500">
-                        {event.note}
-                      </p>
-                    )}
-
-                    {event.type === "reward" &&
-                      event.points !== 0 && (
-                        <p className="mt-1 text-sm font-semibold text-yellow-400">
-                          +{event.points} reward points
-                        </p>
-                      )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </section>
+        <footer className="mt-12 border-t border-slate-800 pt-6 text-center text-xs text-slate-500">
+          Football Tournament Management System · Match Control Room
+        </footer>
       </div>
     </main>
   );
 }
-

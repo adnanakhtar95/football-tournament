@@ -1,10 +1,22 @@
+
 "use client";
 
-import { useEffect, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import Link from "next/link";
+import { useParams } from "next/navigation";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
+
+/* =========================
+   TYPES
+========================= */
 
 interface Team {
   id: number;
@@ -33,7 +45,7 @@ interface Round {
   matches: Match[];
 }
 
-interface Event {
+interface TournamentEvent {
   id: number;
   name: string;
   description: string;
@@ -58,8 +70,27 @@ interface Standing {
   points: number;
 }
 
-async function readJson(response: Response) {
+interface MatchUpdate {
+  type?: string;
+  event?: string;
+  match_id?: number;
+  status?: Match["status"];
+  home_score?: number;
+  away_score?: number;
+}
+
+/* =========================
+   HELPERS
+========================= */
+
+async function readJson(response: Response): Promise<unknown> {
   const text = await response.text();
+
+  if (!text.trim()) {
+    throw new Error(
+      `Empty response from ${response.url} (HTTP ${response.status}).`
+    );
+  }
 
   try {
     return JSON.parse(text);
@@ -70,677 +101,1001 @@ async function readJson(response: Response) {
   }
 }
 
+function formatDate(value: string) {
+  if (!value) return "To be announced";
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "To be announced";
+  }
+
+  return date.toLocaleDateString("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+}
+
+function formatDateTime(value: string) {
+  if (!value) return "To be announced";
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "To be announced";
+  }
+
+  return date.toLocaleString("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function eventStatusStyle(status: TournamentEvent["status"]) {
+  switch (status) {
+    case "active":
+      return "border-green-800 bg-green-500/10 text-green-400";
+
+    case "completed":
+      return "border-slate-700 bg-slate-800 text-slate-300";
+
+    default:
+      return "border-amber-800 bg-amber-500/10 text-amber-400";
+  }
+}
+
+function matchStatusStyle(status: Match["status"]) {
+  switch (status) {
+    case "live":
+      return "border-red-800 bg-red-500/10 text-red-400";
+
+    case "finished":
+      return "border-slate-700 bg-slate-800 text-slate-300";
+
+    default:
+      return "border-blue-800 bg-blue-500/10 text-blue-400";
+  }
+}
+
+function matchStatusLabel(status: Match["status"]) {
+  switch (status) {
+    case "live":
+      return "● Live";
+
+    case "finished":
+      return "Full Time";
+
+    default:
+      return "Upcoming";
+  }
+}
+
+/* =========================
+   COMPONENT
+========================= */
+
 export default function EventDetailsPage() {
   const params = useParams();
-  const router = useRouter();
 
-  const eventId = params.id;
+  const eventId = Array.isArray(params.id)
+    ? params.id[0]
+    : params.id;
 
-  const [event, setEvent] = useState<Event | null>(null);
+  const [event, setEvent] = useState<TournamentEvent | null>(
+    null
+  );
+
   const [standings, setStandings] = useState<Standing[]>([]);
+
   const [loading, setLoading] = useState(true);
+
   const [error, setError] = useState("");
 
-  const [connectedMatches, setConnectedMatches] = useState<
-    Record<number, boolean>
-  >({});
+  const [connected, setConnected] = useState(false);
 
-  useEffect(() => {
-    let cancelled = false;
+  const [selectedTab, setSelectedTab] = useState<
+    "fixtures" | "teams" | "standings"
+  >("fixtures");
 
-    async function loadEvent() {
+  const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
+
+  /* =========================
+     FETCH TOURNAMENT
+  ========================= */
+
+  const loadTournament = useCallback(
+    async (showLoader = false) => {
+      if (!eventId) return;
+
       try {
-        setLoading(true);
-        setError("");
-
-        const response = await fetch(
-          `${API_BASE_URL}/events/${eventId}/`
-        );
-
-        if (!response.ok) {
-          throw new Error("Unable to load tournament.");
+        if (showLoader) {
+          setLoading(true);
         }
 
-        const data = await readJson(response);
+        const [eventResponse, standingsResponse] =
+          await Promise.all([
+            fetch(`${API_BASE_URL}/events/${eventId}/`, {
+              cache: "no-store",
+            }),
 
-        if (!cancelled) {
-          setEvent(data);
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setError(
-            err instanceof Error
-              ? err.message
-              : "Unable to load tournament."
+            fetch(
+              `${API_BASE_URL}/events/${eventId}/standings/`,
+              {
+                cache: "no-store",
+              }
+            ),
+          ]);
+
+        if (!eventResponse.ok) {
+          throw new Error(
+            `Unable to load tournament (HTTP ${eventResponse.status}).`
           );
         }
+
+        if (!standingsResponse.ok) {
+          throw new Error(
+            `Unable to load standings (HTTP ${standingsResponse.status}).`
+          );
+        }
+
+        const eventData = (await readJson(
+          eventResponse
+        )) as TournamentEvent;
+
+        const standingsData = (await readJson(
+          standingsResponse
+        )) as Standing[];
+
+        setEvent(eventData);
+
+        setStandings(
+          Array.isArray(standingsData) ? standingsData : []
+        );
+
+        setError("");
+      } catch (err) {
+        setError(
+          err instanceof Error
+            ? err.message
+            : "Unable to load tournament."
+        );
       } finally {
-        if (!cancelled) {
+        if (showLoader) {
           setLoading(false);
         }
       }
-    }
+    },
+    [eventId]
+  );
 
-    async function loadStandings() {
-      try {
-        const response = await fetch(
-          `${API_BASE_URL}/events/${eventId}/standings/`
-        );
+  /* =========================
+     INITIAL LOAD
+  ========================= */
 
-        if (!response.ok) {
-          throw new Error("Unable to load standings.");
-        }
-
-        const data = await readJson(response);
-
-        if (!cancelled) {
-          setStandings(data);
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setError(
-            err instanceof Error
-              ? err.message
-              : "Unable to load standings."
-          );
-        }
-      }
-    }
-
-    loadEvent();
-    loadStandings();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [eventId]);
-
-  /*
-   * Realtime updates for every match displayed on the tournament page.
-   *
-   * The event API provides all rounds and matches, so once the event
-   * is loaded we subscribe to each match's WebSocket channel.
-   */
   useEffect(() => {
-    if (!event) {
-      return;
+    void loadTournament(true);
+  }, [loadTournament]);
+
+  /* =========================
+     GLOBAL WEBSOCKET
+
+     ONE socket for the entire page.
+     No reconnecting every time a
+     match score changes.
+  ========================= */
+
+  useEffect(() => {
+    if (!eventId) return;
+
+    let active = true;
+
+    let socket: WebSocket | null = null;
+
+    let reconnectTimer: ReturnType<typeof setTimeout> | null =
+      null;
+
+    function scheduleRefresh() {
+      if (refreshTimer.current) {
+        clearTimeout(refreshTimer.current);
+      }
+
+      refreshTimer.current = setTimeout(() => {
+        if (active) {
+          void loadTournament();
+        }
+      }, 350);
     }
 
-    const sockets: WebSocket[] = [];
+    function connect() {
+      if (!active) return;
 
-    const matches = event.rounds.flatMap((round) => round.matches);
+      const backendUrl = new URL(API_BASE_URL);
 
-    matches.forEach((match) => {
-      const socket = new WebSocket(
-        `ws://localhost:8000/ws/matches/${match.id}/`
-      );
+      const protocol =
+        backendUrl.protocol === "https:" ? "wss:" : "ws:";
 
-      sockets.push(socket);
+      const websocketUrl =
+        `${protocol}//${backendUrl.host}/ws/live/`;
+
+    //   socket = new WebSocket(websocketUrl);
+       const currentSocket = new WebSocket(websocketUrl);
+
+socket = currentSocket;
+
+// Handle React Strict Mode unmounting before connection opens.
+currentSocket.addEventListener("open", () => {
+  if (!active) {
+    currentSocket.close(1000, "Component unmounted");
+  }
+});
 
       socket.onopen = () => {
-        setConnectedMatches((current) => ({
-          ...current,
-          [match.id]: true,
-        }));
+        if (!active) return;
+
+        setConnected(true);
+
+        // Catch up on updates missed during disconnection.
+        scheduleRefresh();
       };
 
       socket.onmessage = (message) => {
+        if (!active) return;
+
         try {
-          const data = JSON.parse(message.data);
+          const data = JSON.parse(
+            message.data
+          ) as MatchUpdate;
 
           if (data.type === "connection") {
             return;
           }
 
-          setEvent((currentEvent) => {
-            if (!currentEvent) {
-              return currentEvent;
-            }
+          if (data.match_id !== undefined) {
+            /*
+              Immediately update a known match in local state.
 
-            return {
-              ...currentEvent,
-              rounds: currentEvent.rounds.map((round) => ({
-                ...round,
-                matches: round.matches.map((currentMatch) => {
-                  if (currentMatch.id !== match.id) {
-                    return currentMatch;
-                  }
+              We also refresh the event and standings from
+              the backend to keep everything synchronized.
+            */
 
-                  return {
-                    ...currentMatch,
-                    status: data.status,
-                    home_score: data.home_score,
-                    away_score: data.away_score,
-                  };
-                }),
-              })),
-            };
-          });
+            setEvent((currentEvent) => {
+              if (!currentEvent) return currentEvent;
 
-          /*
-           * A finished match can change the standings.
-           * Reload standings only when the backend tells us that
-           * the match has finished.
-           */
-          if (data.event === "match_finished") {
-            fetch(
-              `${API_BASE_URL}/events/${eventId}/standings/`
-            )
-              .then(async (response) => {
-                if (!response.ok) {
-                  return;
-                }
+              let matchFound = false;
 
-                const updatedStandings = await response.json();
-                setStandings(updatedStandings);
-              })
-              .catch(() => {
-                // Keep the existing standings if the refresh fails.
-              });
+              const updatedRounds = currentEvent.rounds.map(
+                (round) => ({
+                  ...round,
+
+                  matches: round.matches.map((match) => {
+                    if (match.id !== data.match_id) {
+                      return match;
+                    }
+
+                    matchFound = true;
+
+                    return {
+                      ...match,
+
+                      status: data.status ?? match.status,
+
+                      home_score:
+                        data.home_score ?? match.home_score,
+
+                      away_score:
+                        data.away_score ?? match.away_score,
+                    };
+                  }),
+                })
+              );
+
+              if (!matchFound) {
+                return currentEvent;
+              }
+
+              return {
+                ...currentEvent,
+                rounds: updatedRounds,
+              };
+            });
+
+            scheduleRefresh();
           }
         } catch (err) {
           console.error(
-            "Invalid WebSocket message:",
+            "Tournament WebSocket message error:",
             err
           );
         }
       };
 
-      socket.onclose = () => {
-        setConnectedMatches((current) => ({
-          ...current,
-          [match.id]: false,
-        }));
+      socket.onerror = () => {
+        if (active) {
+          setConnected(false);
+        }
       };
 
-      socket.onerror = () => {
-        setConnectedMatches((current) => ({
-          ...current,
-          [match.id]: false,
-        }));
+      socket.onclose = () => {
+        if (!active) return;
+
+        setConnected(false);
+
+        reconnectTimer = setTimeout(() => {
+          connect();
+        }, 3000);
       };
-    });
+    }
+
+    connect();
 
     return () => {
-      sockets.forEach((socket) => {
-        socket.close();
-      });
-    };
-  }, [event, eventId]);
+      active = false;
 
-  function formatDate(value: string) {
-    return new Date(value).toLocaleDateString(undefined, {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-    });
-  }
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+      }
 
-  function formatDateTime(value: string) {
-    return new Date(value).toLocaleString(undefined, {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-      hour: "numeric",
-      minute: "2-digit",
-    });
-  }
+      if (refreshTimer.current) {
+        clearTimeout(refreshTimer.current);
+      }
 
-  function statusLabel(status: string) {
-    return status.charAt(0).toUpperCase() + status.slice(1);
-  }
+    //   socket?.close();
+     const currentSocket = socket;
 
-  function statusStyle(status: Match["status"]) {
-    if (status === "live") {
-      return {
-        background: "#fee2e2",
-        color: "#b91c1c",
-      };
+  if (currentSocket) {
+    currentSocket.onopen = null;
+    currentSocket.onmessage = null;
+    currentSocket.onerror = null;
+    currentSocket.onclose = null;
+
+    if (currentSocket.readyState === WebSocket.OPEN) {
+      currentSocket.close(1000, "Component unmounted");
     }
-
-    if (status === "finished") {
-      return {
-        background: "#e5e7eb",
-        color: "#374151",
-      };
-    }
-
-    return {
-      background: "#fef3c7",
-      color: "#92400e",
-    };
   }
+    };
+  }, [eventId, loadTournament]);
+
+  
+
+  const rounds = useMemo(() => {
+    if (!event) return [];
+
+    return [...event.rounds].sort(
+      (a, b) => a.order_number - b.order_number
+    );
+  }, [event]);
+
+  const matches = useMemo(
+    () => rounds.flatMap((round) => round.matches),
+    [rounds]
+  );
+
+  const liveMatches = matches.filter(
+    (match) => match.status === "live"
+  );
+
+  const finishedMatches = matches.filter(
+    (match) => match.status === "finished"
+  );
+
+  const scheduledMatches = matches.filter(
+    (match) => match.status === "scheduled"
+  );
+
+  /* =========================
+     LOADING
+  ========================= */
 
   if (loading) {
     return (
-      <main style={{ maxWidth: 1100, margin: "0 auto", padding: 40 }}>
-        <p>Loading tournament...</p>
+      <main className="flex min-h-screen items-center justify-center bg-slate-950 px-6 text-white">
+        <div className="text-center">
+          <div className="mb-6 text-5xl">🏆</div>
+
+          <h1 className="text-2xl font-black">
+            Loading Tournament
+          </h1>
+
+          <p className="mt-3 text-sm text-slate-400">
+            Fetching competition details and standings...
+          </p>
+        </div>
       </main>
     );
   }
+
+  /* =========================
+     NOT FOUND
+  ========================= */
 
   if (!event) {
     return (
-      <main style={{ maxWidth: 1100, margin: "0 auto", padding: 40 }}>
-        <button onClick={() => router.push("/events")}>
-          ← Back to Events
-        </button>
+      <main className="min-h-screen bg-slate-950 px-6 py-20 text-white">
+        <div className="mx-auto max-w-3xl rounded-3xl border border-slate-800 bg-slate-900 p-10 text-center">
+          <div className="text-5xl">⚽</div>
 
-        <h1>Event Details</h1>
+          <h1 className="mt-6 text-3xl font-black">
+            Tournament Not Found
+          </h1>
 
-        <p>{error || "Tournament not found."}</p>
+          <p className="mt-4 text-slate-400">
+            {error || "The requested tournament is unavailable."}
+          </p>
+
+          <Link
+            href="/events"
+            className="mt-8 inline-block rounded-xl bg-blue-600 px-6 py-3 text-sm font-bold hover:bg-blue-500"
+          >
+            ← Back to Tournaments
+          </Link>
+        </div>
       </main>
     );
   }
 
+  /* =========================
+     PAGE
+  ========================= */
+
   return (
-    <main
-      style={{
-        maxWidth: 1100,
-        margin: "0 auto",
-        padding: 40,
-      }}
-    >
-      <button
-        onClick={() => router.push("/events")}
-        style={{
-          marginBottom: 25,
-          padding: "9px 15px",
-          border: "1px solid #ccc",
-          borderRadius: 8,
-          background: "white",
-          cursor: "pointer",
-        }}
-      >
-        ← Back to Events
-      </button>
+    <main className="min-h-screen bg-slate-950 text-white">
+      {/* HERO */}
 
-      {error && (
-        <div
-          style={{
-            padding: 14,
-            marginBottom: 25,
-            border: "1px solid #dc2626",
-            borderRadius: 8,
-            background: "#fef2f2",
-            color: "#991b1b",
-          }}
-        >
-          {error}
-        </div>
-      )}
+      <section className="relative overflow-hidden border-b border-slate-800">
+        <div className="pointer-events-none absolute -right-24 -top-40 h-[450px] w-[450px] rounded-full bg-blue-600/10 blur-3xl" />
 
-      {/* EVENT HEADER */}
+        <div className="relative mx-auto max-w-7xl px-6 py-12 sm:py-16">
+          <Link
+            href="/events"
+            className="inline-flex items-center text-sm font-semibold text-slate-400 hover:text-blue-400"
+          >
+            ← All Tournaments
+          </Link>
 
-      <section
-        style={{
-          border: "1px solid #ddd",
-          borderRadius: 14,
-          padding: 30,
-          marginBottom: 30,
-        }}
-      >
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "flex-start",
-            gap: 20,
-          }}
-        >
-          <div>
-            <h1 style={{ marginTop: 0, marginBottom: 10 }}>
-              {event.name}
-            </h1>
-
-            <p
-              style={{
-                color: "#555",
-                lineHeight: 1.6,
-                marginBottom: 20,
-              }}
+          <div className="mt-9 flex flex-wrap items-center gap-3">
+            <span
+              className={`rounded-full border px-4 py-2 text-xs font-bold uppercase tracking-widest ${eventStatusStyle(
+                event.status
+              )}`}
             >
-              {event.description || "No description available."}
-            </p>
+              {event.status}
+            </span>
 
-            <div style={{ color: "#666", fontSize: 14 }}>
-              {formatDate(event.start_date)} →{" "}
-              {formatDate(event.end_date)}
-            </div>
+            <span
+              className={`inline-flex items-center gap-2 rounded-full border px-3 py-2 text-xs font-semibold ${
+                connected
+                  ? "border-green-800 bg-green-500/10 text-green-400"
+                  : "border-slate-700 bg-slate-900 text-slate-400"
+              }`}
+            >
+              <span
+                className={`h-2 w-2 rounded-full ${
+                  connected
+                    ? "bg-green-400"
+                    : "bg-slate-500"
+                }`}
+              />
+
+              {connected
+                ? "Live Updates Connected"
+                : "Connecting to Live Updates..."}
+            </span>
           </div>
 
-          <strong
-            style={{
-              padding: "7px 13px",
-              borderRadius: 999,
-              background:
-                event.status === "active"
-                  ? "#dcfce7"
-                  : event.status === "completed"
-                  ? "#e5e7eb"
-                  : "#fef3c7",
-              color:
-                event.status === "active"
-                  ? "#166534"
-                  : event.status === "completed"
-                  ? "#374151"
-                  : "#92400e",
-            }}
-          >
-            {statusLabel(event.status)}
-          </strong>
+          <h1 className="mt-6 max-w-4xl text-4xl font-black tracking-tight sm:text-5xl lg:text-6xl">
+            {event.name}
+          </h1>
+
+          <p className="mt-5 max-w-3xl text-base leading-8 text-slate-400">
+            {event.description ||
+              "Follow participating teams, explore match fixtures and track the latest competition standings."}
+          </p>
+
+          <div className="mt-7 flex flex-wrap items-center gap-5 text-sm text-slate-400">
+            <span>
+              📅 {formatDate(event.start_date)}
+            </span>
+
+            <span className="text-slate-700">→</span>
+
+            <span>
+              {formatDate(event.end_date)}
+            </span>
+          </div>
+
+          <div className="mt-9 flex flex-wrap gap-3">
+            <Link
+              href="/live"
+              className="rounded-xl bg-blue-600 px-6 py-3 text-sm font-bold transition hover:bg-blue-500"
+            >
+              ● Live Scoreboard →
+            </Link>
+
+            <button
+              type="button"
+              onClick={() => void loadTournament()}
+              className="rounded-xl border border-slate-700 bg-slate-900 px-6 py-3 text-sm font-bold transition hover:border-blue-600"
+            >
+              ↻ Refresh Tournament
+            </button>
+          </div>
         </div>
       </section>
 
-      {/* TEAMS */}
+      <div className="mx-auto max-w-7xl space-y-10 px-6 py-12">
+        {/* ERROR */}
 
-      <section style={{ marginBottom: 35 }}>
-        <h2>Teams</h2>
+        {error && (
+          <div className="rounded-xl border border-red-900 bg-red-950/40 p-4 text-sm text-red-300">
+            {error}
+          </div>
+        )}
 
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns:
-              "repeat(auto-fit, minmax(180px, 1fr))",
-            gap: 15,
-          }}
-        >
-          {event.teams.map((team) => (
+        {/* STATISTICS */}
+
+        <section className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+          {[
+            {
+              label: "Registered Teams",
+              value: event.teams.length,
+              icon: "🛡️",
+            },
+            {
+              label: "Total Matches",
+              value: matches.length,
+              icon: "⚽",
+            },
+            {
+              label: "Live Matches",
+              value: liveMatches.length,
+              icon: "🔴",
+            },
+            {
+              label: "Completed Matches",
+              value: finishedMatches.length,
+              icon: "🏁",
+            },
+          ].map((stat) => (
             <div
-              key={team.id}
-              style={{
-                border: "1px solid #ddd",
-                borderRadius: 10,
-                padding: 18,
-              }}
+              key={stat.label}
+              className="rounded-2xl border border-slate-800 bg-slate-900 p-5 sm:p-6"
             >
-              <strong>{team.name}</strong>
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-xs text-slate-400 sm:text-sm">
+                  {stat.label}
+                </p>
 
-              <div
-                style={{
-                  color: "#777",
-                  marginTop: 5,
-                  fontSize: 14,
-                }}
-              >
-                {team.code}
+                <span className="text-xl">{stat.icon}</span>
               </div>
+
+              <p className="mt-5 text-3xl font-black">
+                {stat.value}
+              </p>
             </div>
           ))}
-        </div>
-      </section>
+        </section>
 
-      {/* ROUNDS & MATCHES */}
+        {/* LIVE MATCHES */}
 
-      <section style={{ marginBottom: 40 }}>
-        <h2>Rounds & Matches</h2>
+        {liveMatches.length > 0 && (
+          <section>
+            <div className="mb-6">
+              <p className="text-xs font-bold uppercase tracking-widest text-red-400">
+                Happening Now
+              </p>
 
-        {event.rounds.length === 0 ? (
-          <p>No rounds have been created yet.</p>
-        ) : (
-          event.rounds.map((round) => (
-            <div
-              key={round.id}
-              style={{
-                border: "1px solid #ddd",
-                borderRadius: 12,
-                padding: 22,
-                marginBottom: 20,
-              }}
-            >
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  marginBottom: 18,
-                }}
+              <h2 className="mt-2 text-3xl font-black">
+                Live Matches
+              </h2>
+            </div>
+
+            <div className="grid gap-5 lg:grid-cols-2">
+              {liveMatches.map((match) => (
+                <Link
+                  key={match.id}
+                  href={`/matches/${match.id}`}
+                  className="group rounded-2xl border border-red-900/70 bg-gradient-to-br from-red-950/30 to-slate-900 p-6 transition hover:border-red-600"
+                >
+                  <div className="mb-7 flex items-center justify-between">
+                    <span className="text-xs text-slate-400">
+                      {match.venue || "Venue TBA"}
+                    </span>
+
+                    <span className="rounded-full border border-red-800 bg-red-500/10 px-3 py-1 text-xs font-black uppercase text-red-400">
+                      ● Live
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3 text-center">
+                    <div className="min-w-0">
+                      <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-blue-950/70 font-black text-blue-300">
+                        {match.home_team.code}
+                      </div>
+
+                      <p className="break-words text-sm font-bold">
+                        {match.home_team.name}
+                      </p>
+                    </div>
+
+                    <div className="whitespace-nowrap text-3xl font-black tabular-nums sm:text-4xl">
+                      {match.home_score}
+                      <span className="mx-2 text-slate-600">:</span>
+                      {match.away_score}
+                    </div>
+
+                    <div className="min-w-0">
+                      <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-purple-950/70 font-black text-purple-300">
+                        {match.away_team.code}
+                      </div>
+
+                      <p className="break-words text-sm font-bold">
+                        {match.away_team.name}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="mt-7 border-t border-red-900/40 pt-4 text-center text-xs font-bold text-red-400 group-hover:text-red-300">
+                    Follow Live Match →
+                  </div>
+                </Link>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {/* TABS */}
+
+        <section>
+          <div className="mb-7 flex flex-wrap gap-2 border-b border-slate-800 pb-4">
+            {(
+              [
+                {
+                  value: "fixtures",
+                  label: "Rounds & Fixtures",
+                },
+                {
+                  value: "teams",
+                  label: "Registered Teams",
+                },
+                {
+                  value: "standings",
+                  label: "League Table",
+                },
+              ] as const
+            ).map((tab) => (
+              <button
+                key={tab.value}
+                type="button"
+                onClick={() => setSelectedTab(tab.value)}
+                className={`rounded-xl px-5 py-3 text-sm font-bold transition ${
+                  selectedTab === tab.value
+                    ? "bg-blue-600 text-white"
+                    : "bg-slate-900 text-slate-400 hover:bg-slate-800 hover:text-white"
+                }`}
               >
-                <h3 style={{ margin: 0 }}>
-                  {round.order_number}. {round.name}
-                </h3>
+                {tab.label}
+              </button>
+            ))}
+          </div>
 
-                <span style={{ color: "#777" }}>
-                  {round.matches.length}{" "}
-                  {round.matches.length === 1
-                    ? "match"
-                    : "matches"}
-                </span>
+          {/* FIXTURES TAB */}
+
+          {selectedTab === "fixtures" && (
+            <div className="space-y-7">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-widest text-blue-400">
+                  Match Schedule
+                </p>
+
+                <h2 className="mt-2 text-3xl font-black">
+                  Rounds & Fixtures
+                </h2>
+
+                <p className="mt-2 text-sm text-slate-400">
+                  {scheduledMatches.length} upcoming ·{" "}
+                  {liveMatches.length} live ·{" "}
+                  {finishedMatches.length} completed
+                </p>
               </div>
 
-              {round.matches.length === 0 ? (
-                <p style={{ color: "#777" }}>
-                  No matches scheduled yet.
-                </p>
+              {rounds.length === 0 ? (
+                <div className="rounded-2xl border border-slate-800 bg-slate-900 p-10 text-center text-slate-400">
+                  No rounds have been created yet.
+                </div>
               ) : (
-                <div>
-                  {round.matches.map((match) => {
-                    const status = statusStyle(match.status);
+                rounds.map((round) => (
+                  <div
+                    key={round.id}
+                    className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 bg-slate-800/40 px-6 py-5">
+                      <div>
+                        <p className="text-xs font-bold uppercase tracking-widest text-blue-400">
+                          Round {round.order_number}
+                        </p>
 
-                    return (
-                      <div
-                        key={match.id}
-                        style={{
-                          border: "1px solid #eee",
-                          borderRadius: 10,
-                          padding: 18,
-                          marginBottom: 12,
-                          cursor: "pointer",
-                        }}
-                        onClick={() =>
-                          router.push(
-                            `/matches/${match.id}`
-                          )
-                        }
-                      >
-                        <div
-                          style={{
-                            display: "flex",
-                            justifyContent:
-                              "space-between",
-                            alignItems: "center",
-                            gap: 15,
-                          }}
-                        >
-                          <div
-                            style={{
-                              display: "flex",
-                              alignItems: "center",
-                              gap: 12,
-                              fontWeight: 600,
-                            }}
-                          >
-                            <span>
-                              {match.home_team.name}
-                            </span>
-
-                            <strong>
-                              {match.home_score} -{" "}
-                              {match.away_score}
-                            </strong>
-
-                            <span>
-                              {match.away_team.name}
-                            </span>
-                          </div>
-
-                          <span
-                            style={{
-                              ...status,
-                              padding: "5px 10px",
-                              borderRadius: 999,
-                              fontSize: 12,
-                              fontWeight: 600,
-                            }}
-                          >
-                            {match.status === "live" &&
-                              "● "}
-                            {statusLabel(match.status)}
-                          </span>
-                        </div>
-
-                        <div
-                          style={{
-                            marginTop: 12,
-                            color: "#777",
-                            fontSize: 13,
-                          }}
-                        >
-                          {formatDateTime(
-                            match.scheduled_at
-                          )}
-
-                          {match.venue && (
-                            <>
-                              {" "}
-                              · {match.venue}
-                            </>
-                          )}
-
-                          {match.status === "live" &&
-                            connectedMatches[
-                              match.id
-                            ] && (
-                              <span
-                                style={{
-                                  marginLeft: 10,
-                                  color: "#15803d",
-                                  fontWeight: 600,
-                                }}
-                              >
-                                Live connection
-                              </span>
-                            )}
-                        </div>
+                        <h3 className="mt-2 text-xl font-black">
+                          {round.name}
+                        </h3>
                       </div>
-                    );
-                  })}
+
+                      <span className="rounded-full border border-slate-700 bg-slate-950 px-3 py-1.5 text-xs font-semibold text-slate-400">
+                        {round.matches.length}{" "}
+                        {round.matches.length === 1
+                          ? "Match"
+                          : "Matches"}
+                      </span>
+                    </div>
+
+                    {round.matches.length === 0 ? (
+                      <div className="px-6 py-8 text-sm text-slate-500">
+                        No matches scheduled for this round.
+                      </div>
+                    ) : (
+                      <div className="divide-y divide-slate-800">
+                        {round.matches.map((match) => (
+                          <Link
+                            key={match.id}
+                            href={`/matches/${match.id}`}
+                            className="group block px-5 py-5 transition hover:bg-slate-800/50 sm:px-6"
+                          >
+                            <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+                              <span className="text-xs text-slate-500">
+                                {formatDateTime(
+                                  match.scheduled_at
+                                )}
+                              </span>
+
+                              <span
+                                className={`rounded-full border px-3 py-1 text-xs font-bold uppercase ${matchStatusStyle(
+                                  match.status
+                                )}`}
+                              >
+                                {matchStatusLabel(match.status)}
+                              </span>
+                            </div>
+
+                            <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3 text-center">
+                              <div className="min-w-0">
+                                <p className="break-words text-sm font-bold sm:text-base">
+                                  {match.home_team.name}
+                                </p>
+
+                                <p className="mt-1 text-xs text-slate-500">
+                                  {match.home_team.code}
+                                </p>
+                              </div>
+
+                              <div className="whitespace-nowrap text-2xl font-black tabular-nums sm:text-3xl">
+                                {match.home_score}
+                                <span className="mx-2 text-slate-600">
+                                  :
+                                </span>
+                                {match.away_score}
+
+                                <p className="mt-1 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+                                  {match.status === "scheduled"
+                                    ? "VS"
+                                    : match.status === "live"
+                                      ? "LIVE"
+                                      : "FT"}
+                                </p>
+                              </div>
+
+                              <div className="min-w-0">
+                                <p className="break-words text-sm font-bold sm:text-base">
+                                  {match.away_team.name}
+                                </p>
+
+                                <p className="mt-1 text-xs text-slate-500">
+                                  {match.away_team.code}
+                                </p>
+                              </div>
+                            </div>
+
+                            <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-slate-800 pt-4 text-xs text-slate-500">
+                              <span>
+                                📍 {match.venue || "Venue TBA"}
+                              </span>
+
+                              <span className="font-bold text-blue-400 group-hover:text-blue-300">
+                                Match Details →
+                              </span>
+                            </div>
+                          </Link>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+
+          {/* TEAMS TAB */}
+
+          {selectedTab === "teams" && (
+            <div>
+              <p className="text-xs font-bold uppercase tracking-widest text-blue-400">
+                Tournament Participants
+              </p>
+
+              <h2 className="mt-2 text-3xl font-black">
+                Registered Teams
+              </h2>
+
+              <p className="mt-2 text-sm text-slate-400">
+                {event.teams.length} teams enrolled in this
+                competition.
+              </p>
+
+              {event.teams.length === 0 ? (
+                <div className="mt-7 rounded-2xl border border-slate-800 bg-slate-900 p-10 text-center text-slate-400">
+                  No teams have been enrolled yet.
+                </div>
+              ) : (
+                <div className="mt-7 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                  {event.teams.map((team) => (
+                    <div
+                      key={team.id}
+                      className="flex items-center gap-4 rounded-2xl border border-slate-800 bg-slate-900 p-5"
+                    >
+                      <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl border border-blue-900 bg-blue-950/40 text-sm font-black text-blue-300">
+                        {team.code.slice(0, 3)}
+                      </div>
+
+                      <div className="min-w-0">
+                        <h3 className="truncate font-bold">
+                          {team.name}
+                        </h3>
+
+                        <p className="mt-1 text-xs uppercase tracking-widest text-slate-500">
+                          {team.code}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               )}
             </div>
-          ))
-        )}
-      </section>
+          )}
 
-      {/* STANDINGS */}
+          {/* STANDINGS TAB */}
 
-      <section>
-        <h2>Standings</h2>
+          {selectedTab === "standings" && (
+            <div>
+              <p className="text-xs font-bold uppercase tracking-widest text-blue-400">
+                Competition Rankings
+              </p>
 
-        {standings.length === 0 ? (
-          <div
-            style={{
-              border: "1px solid #ddd",
-              borderRadius: 12,
-              padding: 25,
-            }}
+              <h2 className="mt-2 text-3xl font-black">
+                League Table
+              </h2>
+
+              <p className="mt-2 text-sm text-slate-400">
+                Match points plus awarded reward points.
+              </p>
+
+              <div className="mt-7 overflow-hidden rounded-2xl border border-slate-800 bg-slate-900">
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[850px] text-left text-sm">
+                    <thead className="border-b border-slate-800 bg-slate-950/60 text-xs uppercase tracking-wider text-slate-400">
+                      <tr>
+                        <th className="px-5 py-4">#</th>
+                        <th className="px-5 py-4">Team</th>
+                        <th className="px-3 py-4 text-center">P</th>
+                        <th className="px-3 py-4 text-center">W</th>
+                        <th className="px-3 py-4 text-center">D</th>
+                        <th className="px-3 py-4 text-center">L</th>
+                        <th className="px-3 py-4 text-center">GF</th>
+                        <th className="px-3 py-4 text-center">GA</th>
+                        <th className="px-3 py-4 text-center">GD</th>
+                        <th className="px-3 py-4 text-center">Reward</th>
+                        <th className="px-5 py-4 text-center">Pts</th>
+                      </tr>
+                    </thead>
+
+                    <tbody>
+                      {standings.map((standing, index) => (
+                        <tr
+                          key={standing.team_id}
+                          className="border-b border-slate-800 transition last:border-0 hover:bg-slate-800/40"
+                        >
+                          <td className="px-5 py-4 text-slate-500">
+                            {index + 1}
+                          </td>
+
+                          <td className="px-5 py-4 font-bold">
+                            {standing.team}
+                          </td>
+
+                          <td className="px-3 py-4 text-center">
+                            {standing.played}
+                          </td>
+
+                          <td className="px-3 py-4 text-center">
+                            {standing.won}
+                          </td>
+
+                          <td className="px-3 py-4 text-center">
+                            {standing.drawn}
+                          </td>
+
+                          <td className="px-3 py-4 text-center">
+                            {standing.lost}
+                          </td>
+
+                          <td className="px-3 py-4 text-center">
+                            {standing.goals_for}
+                          </td>
+
+                          <td className="px-3 py-4 text-center">
+                            {standing.goals_against}
+                          </td>
+
+                          <td className="px-3 py-4 text-center">
+                            {standing.goal_difference}
+                          </td>
+
+                          <td className="px-3 py-4 text-center text-amber-400">
+                            {standing.reward_points}
+                          </td>
+
+                          <td className="px-5 py-4 text-center font-black text-blue-400">
+                            {standing.points}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                {standings.length === 0 && (
+                  <div className="px-6 py-10 text-center text-sm text-slate-500">
+                    No standings available yet.
+                  </div>
+                )}
+              </div>
+
+              <p className="mt-4 text-xs text-slate-500">
+                P: Played · W: Won · D: Drawn · L: Lost ·
+                GF: Goals For · GA: Goals Against ·
+                GD: Goal Difference · Reward: Bonus Points
+              </p>
+            </div>
+          )}
+        </section>
+
+        {/* BOTTOM CTA */}
+
+        <section className="rounded-3xl border border-blue-900 bg-gradient-to-r from-blue-950/60 to-slate-900 px-7 py-11 text-center">
+          <p className="text-xs font-bold uppercase tracking-widest text-blue-400">
+            Follow the Competition
+          </p>
+
+          <h2 className="mt-4 text-3xl font-black">
+            Every Goal. Every Result.
+          </h2>
+
+          <p className="mx-auto mt-4 max-w-xl text-sm leading-7 text-slate-400">
+            Follow the tournament as matches unfold, with live
+            scores, match events and updated league standings.
+          </p>
+
+          <Link
+            href="/live"
+            className="mt-7 inline-block rounded-xl bg-blue-600 px-7 py-3 text-sm font-bold hover:bg-blue-500"
           >
-            <p>No standings available yet.</p>
-          </div>
-        ) : (
-          <div
-            style={{
-              overflowX: "auto",
-              border: "1px solid #ddd",
-              borderRadius: 12,
-            }}
-          >
-            <table
-              style={{
-                width: "100%",
-                borderCollapse: "collapse",
-                minWidth: 750,
-              }}
-            >
-              <thead>
-                <tr
-                  style={{
-                    borderBottom: "1px solid #ddd",
-                    textAlign: "left",
-                  }}
-                >
-                  <th style={{ padding: 14 }}>#</th>
-                  <th style={{ padding: 14 }}>Team</th>
-                  <th style={{ padding: 14 }}>P</th>
-                  <th style={{ padding: 14 }}>W</th>
-                  <th style={{ padding: 14 }}>D</th>
-                  <th style={{ padding: 14 }}>L</th>
-                  <th style={{ padding: 14 }}>GF</th>
-                  <th style={{ padding: 14 }}>GA</th>
-                  <th style={{ padding: 14 }}>GD</th>
-                  <th style={{ padding: 14 }}>Reward</th>
-                  <th style={{ padding: 14 }}>Pts</th>
-                </tr>
-              </thead>
-
-              <tbody>
-                {standings.map((standing, index) => (
-                  <tr
-                    key={standing.team_id}
-                    style={{
-                      borderBottom: "1px solid #eee",
-                    }}
-                  >
-                    <td style={{ padding: 14 }}>
-                      {index + 1}
-                    </td>
-
-                    <td
-                      style={{
-                        padding: 14,
-                        fontWeight: 600,
-                      }}
-                    >
-                      {standing.team}
-                    </td>
-
-                    <td style={{ padding: 14 }}>
-                      {standing.played}
-                    </td>
-
-                    <td style={{ padding: 14 }}>
-                      {standing.won}
-                    </td>
-
-                    <td style={{ padding: 14 }}>
-                      {standing.drawn}
-                    </td>
-
-                    <td style={{ padding: 14 }}>
-                      {standing.lost}
-                    </td>
-
-                    <td style={{ padding: 14 }}>
-                      {standing.goals_for}
-                    </td>
-
-                    <td style={{ padding: 14 }}>
-                      {standing.goals_against}
-                    </td>
-
-                    <td style={{ padding: 14 }}>
-                      {standing.goal_difference}
-                    </td>
-
-                    <td style={{ padding: 14 }}>
-                      {standing.reward_points}
-                    </td>
-
-                    <td
-                      style={{
-                        padding: 14,
-                        fontWeight: 700,
-                      }}
-                    >
-                      {standing.points}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
+            Open Live Scoreboard →
+          </Link>
+        </section>
+      </div>
     </main>
   );
 }

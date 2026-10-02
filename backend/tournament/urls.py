@@ -1,3 +1,4 @@
+
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
@@ -13,10 +14,10 @@ from .views import (
     TeamViewSet,
     csrf_view,
     login_view,
+    logout_view,
+    me_view,
 )
 
-
-path("auth/csrf/", csrf_view, name="csrf"),
 
 router = DefaultRouter()
 
@@ -32,32 +33,39 @@ router.register(
     AdminEventViewSet,
     basename="admin-event",
 )
+
 router.register(
     "admin/teams",
     AdminTeamViewSet,
     basename="admin-team",
 )
+
 router.register(
     "admin/rounds",
     AdminRoundViewSet,
     basename="admin-round",
 )
+
 router.register(
     "admin/matches",
     AdminMatchViewSet,
     basename="admin-match",
 )
+
 router.register(
     "admin/event-teams",
     AdminEventTeamViewSet,
     basename="admin-event-team",
 )
 
-# urlpatterns = [
-#     path("", include(router.urls)),
-# ]
+
 urlpatterns = [
+    # Authentication
     path("auth/login/", login_view, name="login"),
-     path("auth/csrf/", csrf_view, name="csrf"),
+    path("auth/logout/", logout_view, name="logout"),
+    path("auth/csrf/", csrf_view, name="csrf"),
+    path("auth/me/", me_view, name="me"),
+
+    # API routes
     path("", include(router.urls)),
 ]
