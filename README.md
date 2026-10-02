@@ -219,6 +219,25 @@ football-tournament/
 **---**
 
 
+## Database Design (ERD)
+
+The Football Tournament Management System uses PostgreSQL with six core tables: Event, Team, EventTeam, Round, Match, and MatchEvent.
+
+The following Entity Relationship Diagram illustrates the database schema, primary keys, foreign keys, and table relationships.
+
+![Football Tournament Database ERD](docs/database-erd.png)
+
+### Database Relationships
+
+- **Event ↔ Team:** Many-to-many relationship through EventTeam.
+- **Event → Round:** One event contains multiple rounds.
+- **Round → Match:** One round schedules multiple matches.
+- **Team → Match:** Each match references a home team and an away team.
+- **Match → MatchEvent:** One match records multiple activities.
+- **Team → MatchEvent:** Each activity is associated with a participating team.
+
+
+
 ## 4. Backend Installation
 ### Requirements
 Install:
