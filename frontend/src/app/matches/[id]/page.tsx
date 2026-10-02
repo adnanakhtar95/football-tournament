@@ -34,7 +34,7 @@ interface Match {
 
 interface MatchEvent {
   id: number;
-  team: number;
+  team: number | Team;
   type: string;
   player_name: string;
   minute: number;
@@ -741,12 +741,17 @@ export default function MatchPage() {
           ) : (
             <div className="mt-7 space-y-3">
               {events.map((event) => {
-                const team =
-                  event.team === homeTeam.id
-                    ? homeTeam
-                    : event.team === awayTeam.id
-                      ? awayTeam
-                      : null;
+               const teamId =
+  typeof event.team === "object" && event.team !== null
+    ? event.team.id
+    : event.team;
+
+const team =
+  teamId === homeTeam.id
+    ? homeTeam
+    : teamId === awayTeam.id
+      ? awayTeam
+      : null;
 
                 return (
                   <article
@@ -768,7 +773,7 @@ export default function MatchPage() {
                         </span>
 
                         <span className="text-sm text-slate-400">
-                          {team?.name || `Team #${event.team}`}
+                          {team?.name || `Team #${teamId}`}
                         </span>
                       </div>
 
