@@ -4,7 +4,7 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.utils import timezone
 
-from .models import Event, EventTeam, Match, MatchEvent, Team
+from .models import Event, EventTeam, Match, MatchEvent, Player, Team
 
 
 
@@ -25,6 +25,7 @@ def broadcast_match_update(match, event_type, event=None):
             "id": event.id,
             "type": event.type,
             "team_id": event.team_id,
+            "player_id": event.player_id,           
             "player_name": event.player_name,
             "minute": event.minute,
             "points": event.points,
@@ -130,6 +131,7 @@ def finish_match(match_id):
     return match
 
 
+
 @transaction.atomic
 def record_goal(
     match_id,
@@ -137,20 +139,26 @@ def record_goal(
     minute,
     player_name="",
     note="",
+    player_id=None,
 ):
     match = (
         Match.objects
         .select_for_update()
-        .select_related(
-            "home_team",
-            "away_team",
-        )
+        .select_related("home_team", "away_team")
         .get(pk=match_id)
     )
 
     if match.status != Match.Status.LIVE:
         raise ValidationError(
             "Goals can only be recorded for live matches."
+        )
+
+    try:
+        team_id = int(team_id)
+        minute = int(minute)
+    except (TypeError, ValueError):
+        raise ValidationError(
+            "Team ID and minute must be valid integers."
         )
 
     if team_id not in (
@@ -166,9 +174,41 @@ def record_goal(
             "Minute must be between 0 and 120."
         )
 
+    player = None
+
+    if player_id not in (None, ""):
+        try:
+            player_id = int(player_id)
+        except (TypeError, ValueError):
+            raise ValidationError(
+                "Player ID must be a valid integer."
+            )
+
+        try:
+            player = Player.objects.get(pk=player_id)
+        except Player.DoesNotExist:
+            raise ValidationError(
+                "The selected player does not exist."
+            )
+
+        if player.team_id != team_id:
+            raise ValidationError(
+                "The selected player does not belong "
+                "to the scoring team."
+            )
+
+        if not player.is_active:
+            raise ValidationError(
+                "Cannot record a new goal for an inactive player."
+            )
+
+        # Always use the registered player's name when supplied.
+        player_name = player.full_name
+
     event = MatchEvent.objects.create(
         match=match,
         team_id=team_id,
+        player=player,
         type=MatchEvent.EventType.GOAL,
         player_name=player_name,
         minute=minute,
@@ -196,7 +236,6 @@ def record_goal(
     )
 
     return event
-
 
 @transaction.atomic
 def record_match_event(

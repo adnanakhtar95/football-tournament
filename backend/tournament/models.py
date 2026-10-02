@@ -44,6 +44,56 @@ class Team(models.Model):
         return f"{self.name} ({self.code})"
 
 
+class Player(models.Model):
+    class Position(models.TextChoices):
+        GOALKEEPER = "GK", "Goalkeeper"
+        DEFENDER = "DF", "Defender"
+        MIDFIELDER = "MF", "Midfielder"
+        FORWARD = "FW", "Forward"
+
+    team = models.ForeignKey(
+        Team,
+        on_delete=models.PROTECT,
+        related_name="players",
+    )
+
+    full_name = models.CharField(max_length=100)
+
+    jersey_number = models.PositiveSmallIntegerField()
+
+    position = models.CharField(
+        max_length=2,
+        choices=Position.choices,
+    )
+
+    is_active = models.BooleanField(default=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["team__name", "jersey_number"]
+
+        constraints = [
+            models.UniqueConstraint(
+                fields=["team", "jersey_number"],
+                name="unique_player_jersey_per_team",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(
+                    jersey_number__gte=1,
+                    jersey_number__lte=99,
+                ),
+                name="valid_player_jersey_number",
+            ),
+        ]
+
+    def __str__(self):
+        return (
+            f"{self.full_name} "
+            f"(#{self.jersey_number} - {self.team.code})"
+        )
+
+
 class EventTeam(models.Model):
     event = models.ForeignKey(
         Event,
@@ -187,11 +237,20 @@ class MatchEvent(models.Model):
         max_length=20,
         choices=EventType.choices,
     )
-
+    
+    player = models.ForeignKey(
+        Player,
+        on_delete=models.SET_NULL,
+        related_name="match_events",
+        null=True,
+        blank=True,
+        help_text="Optional registered player associated with this event.",
+    )
     player_name = models.CharField(
         max_length=100,
         blank=True,
     )
+
 
     minute = models.PositiveIntegerField()
 

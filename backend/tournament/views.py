@@ -11,12 +11,14 @@ from django.views.decorators.csrf import ensure_csrf_cookie
 
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
+from django.db.models import Count
 
 from .models import (
     Event,
     EventTeam,
     Match,
     MatchEvent,
+    Player,
     Round,
     Team,
 )
@@ -24,11 +26,13 @@ from .serializers import (
     AdminEventSerializer,
     AdminEventTeamSerializer,
     AdminMatchSerializer,
+    AdminPlayerSerializer,
     AdminRoundSerializer,
     AdminTeamSerializer,
     EventSerializer,
     MatchEventSerializer,
     MatchSerializer,
+    PlayerSerializer,
     TeamSerializer,
 )
 from .services import (
@@ -75,13 +79,83 @@ class EventViewSet(viewsets.ReadOnlyModelViewSet):
         standings = get_event_standings(event.id)
 
         return Response(standings)
+    
+    @action(
+        detail=True,
+        methods=["get"],
+        url_path="top-scorers",
+    )
+    def top_scorers(self, request, pk=None):
+        """
+        Return the top goal scorers for a tournament.
+
+        Only goal events associated with registered Player
+        records are included.
+        """
+
+        event = get_object_or_404(Event, pk=pk)
+
+        scorers = (
+            MatchEvent.objects
+            .filter(
+                match__round__event=event,
+                type=MatchEvent.EventType.GOAL,
+                player__isnull=False,
+            )
+            .values(
+                "player_id",
+                "player__full_name",
+                "player__jersey_number",
+                "player__team_id",
+                "player__team__name",
+                "player__team__code",
+            )
+            .annotate(goals=Count("id"))
+            .order_by("-goals", "player__full_name", "player_id")
+        )
+
+        return Response([
+            {
+                "player_id": scorer["player_id"],
+                "player_name": scorer["player__full_name"],
+                "jersey_number": scorer["player__jersey_number"],
+                "team_id": scorer["player__team_id"],
+                "team_name": scorer["player__team__name"],
+                "team_code": scorer["player__team__code"],
+                "goals": scorer["goals"],
+            }
+            for scorer in scorers
+        ])
 
 
+    
 class TeamViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = Team.objects.all()
     serializer_class = TeamSerializer
     permission_classes = [AllowAny]
     pagination_class = StandardPagination
+
+
+class PlayerViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    Public endpoint for viewing registered players.
+    Supports optional filtering by team.
+    """
+
+    serializer_class = PlayerSerializer
+    permission_classes = [AllowAny]
+    pagination_class = StandardPagination
+
+    def get_queryset(self):
+        queryset = Player.objects.select_related("team").all()
+
+        team_id = self.request.query_params.get("team")
+
+        if team_id:
+            queryset = queryset.filter(team_id=team_id)
+
+        return queryset
+
 
 class AdminEventViewSet(viewsets.ModelViewSet):
     queryset = Event.objects.all()
@@ -95,6 +169,30 @@ class AdminTeamViewSet(viewsets.ModelViewSet):
     serializer_class = AdminTeamSerializer
     permission_classes = [IsAdminUser]
     pagination_class = StandardPagination
+
+
+
+class AdminPlayerViewSet(viewsets.ModelViewSet):
+    """
+    Administrator-only player management.
+
+    Supports:
+    GET, POST, PUT, PATCH and DELETE.
+    """
+
+    serializer_class = AdminPlayerSerializer
+    permission_classes = [IsAdminUser]
+    pagination_class = StandardPagination
+
+    def get_queryset(self):
+        queryset = Player.objects.select_related("team").all()
+
+        team_id = self.request.query_params.get("team")
+
+        if team_id:
+            queryset = queryset.filter(team_id=team_id)
+
+        return queryset
 
 
 class AdminRoundViewSet(viewsets.ModelViewSet):
@@ -258,6 +356,7 @@ class MatchViewSet(viewsets.ReadOnlyModelViewSet):
     )
     def goal(self, request, pk=None):
         try:
+            
             event = record_goal(
                 match_id=pk,
                 team_id=request.data["team_id"],
@@ -270,7 +369,11 @@ class MatchViewSet(viewsets.ReadOnlyModelViewSet):
                     "note",
                     "",
                 ),
+                player_id=request.data.get(
+                    "player_id",
+                ),
             )
+
         except (
             Match.DoesNotExist,
             KeyError,
@@ -343,7 +446,7 @@ class MatchViewSet(viewsets.ReadOnlyModelViewSet):
         events = (
             MatchEvent.objects
             .filter(match=match)
-            .select_related("team")
+            .select_related("team", "player__team")
         )
 
         return Response(

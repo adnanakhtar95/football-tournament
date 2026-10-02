@@ -6,11 +6,13 @@ from .views import (
     AdminEventViewSet,
     AdminEventTeamViewSet,
     AdminMatchViewSet,
+    AdminPlayerViewSet,
     AdminRoundViewSet,
     AdminTeamViewSet,
     EventViewSet,
     LiveMatchViewSet,
     MatchViewSet,
+    PlayerViewSet,
     TeamViewSet,
     csrf_view,
     login_view,
@@ -21,13 +23,39 @@ from .views import (
 
 router = DefaultRouter()
 
-# Public API
-router.register("events", EventViewSet, basename="event")
-router.register("teams", TeamViewSet, basename="team")
-router.register("matches", MatchViewSet, basename="match")
-router.register("live", LiveMatchViewSet, basename="live")
 
-# Admin API
+router.register(
+    "events",
+    EventViewSet,
+    basename="event",
+)
+
+router.register(
+    "teams",
+    TeamViewSet,
+    basename="team",
+)
+
+router.register(
+    "players",
+    PlayerViewSet,
+    basename="player",
+)
+
+router.register(
+    "matches",
+    MatchViewSet,
+    basename="match",
+)
+
+router.register(
+    "live",
+    LiveMatchViewSet,
+    basename="live",
+)
+
+
+
 router.register(
     "admin/events",
     AdminEventViewSet,
@@ -38,6 +66,12 @@ router.register(
     "admin/teams",
     AdminTeamViewSet,
     basename="admin-team",
+)
+
+router.register(
+    "admin/players",
+    AdminPlayerViewSet,
+    basename="admin-player",
 )
 
 router.register(

@@ -1,4 +1,3 @@
-
 "use client";
 
 import Link from "next/link";
@@ -68,6 +67,17 @@ interface Standing {
   goal_difference: number;
   reward_points: number;
   points: number;
+}
+
+// NEW: Registered player goal statistics.
+interface TopScorer {
+  player_id: number;
+  player_name: string;
+  jersey_number: number;
+  team_id: number;
+  team_name: string;
+  team_code: string;
+  goals: number;
 }
 
 interface MatchUpdate {
@@ -191,6 +201,9 @@ export default function EventDetailsPage() {
 
   const [standings, setStandings] = useState<Standing[]>([]);
 
+  // NEW: Top scorers state.
+  const [topScorers, setTopScorers] = useState<TopScorer[]>([]);
+
   const [loading, setLoading] = useState(true);
 
   const [error, setError] = useState("");
@@ -198,7 +211,7 @@ export default function EventDetailsPage() {
   const [connected, setConnected] = useState(false);
 
   const [selectedTab, setSelectedTab] = useState<
-    "fixtures" | "teams" | "standings"
+    "fixtures" | "teams" | "standings" | "scorers"
   >("fixtures");
 
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(
@@ -218,19 +231,30 @@ export default function EventDetailsPage() {
           setLoading(true);
         }
 
-        const [eventResponse, standingsResponse] =
-          await Promise.all([
-            fetch(`${API_BASE_URL}/events/${eventId}/`, {
-              cache: "no-store",
-            }),
+        // NEW: Fetch leaderboard alongside existing tournament data.
+        const [
+          eventResponse,
+          standingsResponse,
+          scorersResponse,
+        ] = await Promise.all([
+          fetch(`${API_BASE_URL}/events/${eventId}/`, {
+            cache: "no-store",
+          }),
 
-            fetch(
-              `${API_BASE_URL}/events/${eventId}/standings/`,
-              {
-                cache: "no-store",
-              }
-            ),
-          ]);
+          fetch(
+            `${API_BASE_URL}/events/${eventId}/standings/`,
+            {
+              cache: "no-store",
+            }
+          ),
+
+          fetch(
+            `${API_BASE_URL}/events/${eventId}/top-scorers/`,
+            {
+              cache: "no-store",
+            }
+          ),
+        ]);
 
         if (!eventResponse.ok) {
           throw new Error(
@@ -244,6 +268,12 @@ export default function EventDetailsPage() {
           );
         }
 
+        if (!scorersResponse.ok) {
+          throw new Error(
+            `Unable to load top scorers (HTTP ${scorersResponse.status}).`
+          );
+        }
+
         const eventData = (await readJson(
           eventResponse
         )) as TournamentEvent;
@@ -252,10 +282,18 @@ export default function EventDetailsPage() {
           standingsResponse
         )) as Standing[];
 
+        const scorersData = (await readJson(
+          scorersResponse
+        )) as TopScorer[];
+
         setEvent(eventData);
 
         setStandings(
           Array.isArray(standingsData) ? standingsData : []
+        );
+
+        setTopScorers(
+          Array.isArray(scorersData) ? scorersData : []
         );
 
         setError("");
@@ -288,6 +326,8 @@ export default function EventDetailsPage() {
      ONE socket for the entire page.
      No reconnecting every time a
      match score changes.
+
+     EXISTING LOGIC PRESERVED.
   ========================= */
 
   useEffect(() => {
@@ -323,19 +363,18 @@ export default function EventDetailsPage() {
       const websocketUrl =
         `${protocol}//${backendUrl.host}/ws/live/`;
 
-    //   socket = new WebSocket(websocketUrl);
-       const currentSocket = new WebSocket(websocketUrl);
+      const currentSocket = new WebSocket(websocketUrl);
 
-socket = currentSocket;
+      socket = currentSocket;
 
-// Handle React Strict Mode unmounting before connection opens.
-currentSocket.addEventListener("open", () => {
-  if (!active) {
-    currentSocket.close(1000, "Component unmounted");
-  }
-});
+      // Handle React Strict Mode unmounting before connection opens.
+      currentSocket.addEventListener("open", () => {
+        if (!active) {
+          currentSocket.close(1000, "Component unmounted");
+        }
+      });
 
-      socket.onopen = () => {
+      currentSocket.onopen = () => {
         if (!active) return;
 
         setConnected(true);
@@ -344,7 +383,7 @@ currentSocket.addEventListener("open", () => {
         scheduleRefresh();
       };
 
-      socket.onmessage = (message) => {
+      currentSocket.onmessage = (message) => {
         if (!active) return;
 
         try {
@@ -360,8 +399,8 @@ currentSocket.addEventListener("open", () => {
             /*
               Immediately update a known match in local state.
 
-              We also refresh the event and standings from
-              the backend to keep everything synchronized.
+              We also refresh the event, standings and top scorers
+              from the backend to keep everything synchronized.
             */
 
             setEvent((currentEvent) => {
@@ -415,13 +454,13 @@ currentSocket.addEventListener("open", () => {
         }
       };
 
-      socket.onerror = () => {
+      currentSocket.onerror = () => {
         if (active) {
           setConnected(false);
         }
       };
 
-      socket.onclose = () => {
+      currentSocket.onclose = () => {
         if (!active) return;
 
         setConnected(false);
@@ -445,23 +484,24 @@ currentSocket.addEventListener("open", () => {
         clearTimeout(refreshTimer.current);
       }
 
-    //   socket?.close();
-     const currentSocket = socket;
+      const currentSocket = socket;
 
-  if (currentSocket) {
-    currentSocket.onopen = null;
-    currentSocket.onmessage = null;
-    currentSocket.onerror = null;
-    currentSocket.onclose = null;
+      if (currentSocket) {
+        currentSocket.onopen = null;
+        currentSocket.onmessage = null;
+        currentSocket.onerror = null;
+        currentSocket.onclose = null;
 
-    if (currentSocket.readyState === WebSocket.OPEN) {
-      currentSocket.close(1000, "Component unmounted");
-    }
-  }
+        if (currentSocket.readyState === WebSocket.OPEN) {
+          currentSocket.close(1000, "Component unmounted");
+        }
+      }
     };
   }, [eventId, loadTournament]);
 
-  
+  /* =========================
+     DERIVED DATA
+  ========================= */
 
   const rounds = useMemo(() => {
     if (!event) return [];
@@ -598,15 +638,11 @@ currentSocket.addEventListener("open", () => {
           </p>
 
           <div className="mt-7 flex flex-wrap items-center gap-5 text-sm text-slate-400">
-            <span>
-              📅 {formatDate(event.start_date)}
-            </span>
+            <span>📅 {formatDate(event.start_date)}</span>
 
             <span className="text-slate-700">→</span>
 
-            <span>
-              {formatDate(event.end_date)}
-            </span>
+            <span>{formatDate(event.end_date)}</span>
           </div>
 
           <div className="mt-9 flex flex-wrap gap-3">
@@ -767,6 +803,11 @@ currentSocket.addEventListener("open", () => {
                   value: "standings",
                   label: "League Table",
                 },
+                // NEW TAB
+                {
+                  value: "scorers",
+                  label: "⚽ Top Scorers",
+                },
               ] as const
             ).map((tab) => (
               <button
@@ -874,9 +915,11 @@ currentSocket.addEventListener("open", () => {
 
                               <div className="whitespace-nowrap text-2xl font-black tabular-nums sm:text-3xl">
                                 {match.home_score}
+
                                 <span className="mx-2 text-slate-600">
                                   :
                                 </span>
+
                                 {match.away_score}
 
                                 <p className="mt-1 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
@@ -1067,6 +1110,91 @@ currentSocket.addEventListener("open", () => {
                 P: Played · W: Won · D: Drawn · L: Lost ·
                 GF: Goals For · GA: Goals Against ·
                 GD: Goal Difference · Reward: Bonus Points
+              </p>
+            </div>
+          )}
+
+          {/* =========================
+              NEW: TOP SCORERS TAB
+          ========================= */}
+
+          {selectedTab === "scorers" && (
+            <div>
+              <p className="text-xs font-bold uppercase tracking-widest text-blue-400">
+                Player Rankings
+              </p>
+
+              <h2 className="mt-2 text-3xl font-black">
+                ⚽ Tournament Top Scorers
+              </h2>
+
+              <p className="mt-2 text-sm text-slate-400">
+                Goals recorded for registered players in this tournament.
+                Rankings update with live match events.
+              </p>
+
+              <div className="mt-7 overflow-hidden rounded-2xl border border-slate-800 bg-slate-900">
+                {topScorers.length === 0 ? (
+                  <div className="px-6 py-12 text-center text-sm text-slate-400">
+                    No registered player goals have been recorded yet.
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full min-w-[520px] text-left text-sm">
+                      <thead className="border-b border-slate-800 bg-slate-950/60 text-xs uppercase tracking-wider text-slate-400">
+                        <tr>
+                          <th className="px-5 py-4">Rank</th>
+                          <th className="px-5 py-4">Player</th>
+                          <th className="px-5 py-4">Team</th>
+                          <th className="px-5 py-4 text-center">
+                            Goals
+                          </th>
+                        </tr>
+                      </thead>
+
+                      <tbody>
+                        {topScorers.map((scorer, index) => (
+                          <tr
+                            key={scorer.player_id}
+                            className="border-b border-slate-800 transition last:border-0 hover:bg-slate-800/40"
+                          >
+                            <td className="px-5 py-4 font-bold text-slate-400">
+                              {index + 1}
+                            </td>
+
+                            <td className="px-5 py-4">
+                              <div className="font-bold text-white">
+                                {scorer.player_name}
+                              </div>
+
+                              <div className="mt-1 text-xs text-slate-500">
+                                Jersey #{scorer.jersey_number}
+                              </div>
+                            </td>
+
+                            <td className="px-5 py-4">
+                              <div className="text-slate-200">
+                                {scorer.team_name}
+                              </div>
+
+                              <div className="mt-1 text-xs text-slate-500">
+                                {scorer.team_code}
+                              </div>
+                            </td>
+
+                            <td className="px-5 py-4 text-center text-xl font-black tabular-nums text-blue-400">
+                              {scorer.goals}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+
+              <p className="mt-4 text-xs text-slate-500">
+                Goals without a registered player association are excluded.
               </p>
             </div>
           )}

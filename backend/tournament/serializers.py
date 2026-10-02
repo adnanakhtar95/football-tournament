@@ -5,6 +5,7 @@ from .models import (
     EventTeam,
     Match,
     MatchEvent,
+    Player,
     Round,
     Team,
 )
@@ -21,6 +22,26 @@ class TeamSerializer(serializers.ModelSerializer):
         ]
 
 
+class PlayerSerializer(serializers.ModelSerializer):
+    team = TeamSerializer(read_only=True)
+    position_display = serializers.CharField(
+        source="get_position_display",
+        read_only=True,
+    )
+
+    class Meta:
+        model = Player
+        fields = [
+            "id",
+            "team",
+            "full_name",
+            "jersey_number",
+            "position",
+            "position_display",
+            "is_active",
+        ]
+
+
 class EventTeamSerializer(serializers.ModelSerializer):
     team = TeamSerializer(read_only=True)
 
@@ -32,14 +53,18 @@ class EventTeamSerializer(serializers.ModelSerializer):
         ]
 
 
+
 class MatchEventSerializer(serializers.ModelSerializer):
     team = TeamSerializer(read_only=True)
+
+    player = PlayerSerializer(read_only=True)
 
     class Meta:
         model = MatchEvent
         fields = [
             "id",
             "team",
+            "player",
             "type",
             "player_name",
             "minute",
@@ -142,6 +167,67 @@ class AdminTeamSerializer(serializers.ModelSerializer):
             "code",
             "logo",
         ]
+
+
+class AdminPlayerSerializer(serializers.ModelSerializer):
+    team_name = serializers.CharField(
+        source="team.name",
+        read_only=True,
+    )
+
+    class Meta:
+        model = Player
+        fields = [
+            "id",
+            "team",
+            "team_name",
+            "full_name",
+            "jersey_number",
+            "position",
+            "is_active",
+            "created_at",
+        ]
+
+        read_only_fields = ["id", "created_at"]
+
+    def validate_jersey_number(self, value):
+        if not 1 <= value <= 99:
+            raise serializers.ValidationError(
+                "Jersey number must be between 1 and 99."
+            )
+
+        return value
+
+    def validate(self, attrs):
+        team = attrs.get(
+            "team",
+            self.instance.team if self.instance else None,
+        )
+
+        jersey_number = attrs.get(
+            "jersey_number",
+            self.instance.jersey_number if self.instance else None,
+        )
+
+        if team is not None and jersey_number is not None:
+            existing_player = Player.objects.filter(
+                team=team,
+                jersey_number=jersey_number,
+            )
+
+            if self.instance:
+                existing_player = existing_player.exclude(
+                    pk=self.instance.pk
+                )
+
+            if existing_player.exists():
+                raise serializers.ValidationError({
+                    "jersey_number":
+                        "This jersey number is already assigned "
+                        "to another player in the selected team."
+                })
+
+        return attrs
 
 
 class AdminRoundSerializer(serializers.ModelSerializer):
