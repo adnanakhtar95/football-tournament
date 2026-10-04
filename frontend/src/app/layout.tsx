@@ -1,27 +1,125 @@
+// import type { Metadata } from "next";
+// import {
+//   Space_Grotesk,
+//   Manrope,
+//   Geist_Mono,
+// } from "next/font/google";
+
+// import PublicNavbarGate from "../components/PublicNavbarGate";
+
+// import "./globals.css";
+
+// const headingFont = Space_Grotesk({
+//   variable: "--font-heading",
+//   subsets: ["latin"],
+//   display: "swap",
+// });
+
+// const bodyFont = Manrope({
+//   variable: "--font-body",
+//   subsets: ["latin"],
+//   display: "swap",
+// });
+
+// const monoFont = Geist_Mono({
+//   variable: "--font-code",
+//   subsets: ["latin"],
+//   display: "swap",
+// });
+
+// export const metadata: Metadata = {
+//   title: {
+//     default: "Football Cup | Tournament Platform",
+//     template: "%s | Football Cup",
+//   },
+//   description:
+//     "Explore football tournaments, follow live scores, discover players and experience real-time match updates.",
+// };
+
+// export default function RootLayout({
+//   children,
+// }: Readonly<{
+//   children: React.ReactNode;
+// }>) {
+//   return (
+//     <html
+//       lang="en"
+//       className={`
+//         ${headingFont.variable}
+//         ${bodyFont.variable}
+//         ${monoFont.variable}
+//         antialiased
+//       `}
+//     >
+//       <body className="min-h-screen bg-background text-foreground">
+//         <PublicNavbarGate />
+
+//         <div className="min-h-screen">{children}</div>
+//       </body>
+//     </html>
+//   );
+// }
+
 
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
-import PublicNavbar from "../components/PublicNavbar";
+
+import {
+  Space_Grotesk,
+  Manrope,
+  Geist_Mono,
+} from "next/font/google";
+
+import PublicNavbarGate from "../components/PublicNavbarGate";
+
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
+/* ==========================================
+   TYPOGRAPHY
+========================================== */
+
+// Main headings across the public and admin UI
+const headingFont = Space_Grotesk({
+  variable: "--font-heading",
   subsets: ["latin"],
+  display: "swap",
+  preload: true,
 });
 
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
+// Primary body typography
+const bodyFont = Manrope({
+  variable: "--font-body",
   subsets: ["latin"],
+  display: "swap",
+  preload: true,
 });
+
+// Secondary typography for codes, numbers, etc.
+// Avoid preloading because it may not be used
+// immediately on every page.
+const monoFont = Geist_Mono({
+  variable: "--font-code",
+  subsets: ["latin"],
+  display: "swap",
+  preload: false,
+});
+
+/* ==========================================
+   METADATA
+========================================== */
 
 export const metadata: Metadata = {
   title: {
-    default: "Football Tournament Management System",
-    template: "%s | Football Tournament",
+    default: "Football Cup | Tournament Platform",
+    template: "%s | Football Cup",
   },
+
   description:
-    "Manage football tournaments, explore fixtures, follow live scores and view realtime match updates.",
+    "Explore football tournaments, follow live scores, discover players and experience real-time match updates.",
 };
+
+/* ==========================================
+   ROOT LAYOUT
+========================================== */
 
 export default function RootLayout({
   children,
@@ -31,12 +129,19 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`
+        ${headingFont.variable}
+        ${bodyFont.variable}
+        ${monoFont.variable}
+        antialiased
+      `}
     >
-      <body className="flex min-h-screen flex-col bg-slate-950 text-white">
-        <PublicNavbar />
+      <body className="min-h-screen bg-background text-foreground">
+        <PublicNavbarGate />
 
-        <div className="flex-1">{children}</div>
+        <div className="min-h-screen">
+          {children}
+        </div>
       </body>
     </html>
   );

@@ -1,10 +1,28 @@
-
 import Link from "next/link";
+
+import {
+  ArrowRight,
+  ArrowUpRight,
+  CalendarDays,
+  ChevronRight,
+  CircleDot,
+  Clock3,
+  MapPin,
+  Radio,
+  Shield,
+  Trophy,
+  Users,
+} from "lucide-react";
+
 import { getEvents, getStandings } from "@/lib/api";
 import HomeRealtime from "@/components/HomeRealtime";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
+
+/* -----------------------------------------
+   Helpers
+----------------------------------------- */
 
 function formatDate(value: string) {
   if (!value) return "Date to be announced";
@@ -27,61 +45,139 @@ function formatDate(value: string) {
 function statusStyle(status: string) {
   switch (status) {
     case "live":
+      return "border-red-400/25 bg-red-400/10 text-red-300";
+
     case "active":
-      return "border-green-800 bg-green-500/10 text-green-400";
+      return "border-[#F5C66C]/30 bg-[#F5C66C]/10 text-[#F5C66C]";
 
     case "finished":
     case "completed":
-      return "border-slate-700 bg-slate-800 text-slate-300";
+      return "border-[#45515D] bg-[#26313B] text-[#C1CAD3]";
 
     default:
-      return "border-amber-800 bg-amber-500/10 text-amber-400";
+      return "border-[#F5C66C]/20 bg-[#F5C66C]/[0.06] text-[#E3BE78]";
   }
 }
+
+/* -----------------------------------------
+   Shared section heading
+----------------------------------------- */
+
+function SectionHeading({
+  eyebrow,
+  title,
+  description,
+  href,
+  linkLabel,
+}: {
+  eyebrow: string;
+  title: string;
+  description?: string;
+  href?: string;
+  linkLabel?: string;
+}) {
+  return (
+    <div className="mb-7 flex flex-wrap items-end justify-between gap-5">
+      <div>
+        <div className="mb-3 flex items-center gap-2.5">
+          <span className="h-px w-5 bg-[#F5C66C]" />
+
+          <p className="text-[10px] font-extrabold uppercase tracking-[0.23em] text-[#F5C66C]">
+            {eyebrow}
+          </p>
+        </div>
+
+        <h2 className="font-heading text-[28px] font-bold tracking-[-0.05em] text-white sm:text-[34px]">
+          {title}
+        </h2>
+
+        {description && (
+          <p className="mt-2 max-w-xl text-[13px] leading-6 text-[#8E9BA8]">
+            {description}
+          </p>
+        )}
+      </div>
+
+      {href && linkLabel && (
+        <Link
+          href={href}
+          className="group inline-flex items-center gap-2 text-[12px] font-bold text-[#F5C66C] transition hover:text-[#FFDA91]"
+        >
+          {linkLabel}
+
+          <ArrowUpRight
+            size={15}
+            className="transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5"
+          />
+        </Link>
+      )}
+    </div>
+  );
+}
+
+/* -----------------------------------------
+   Homepage
+----------------------------------------- */
 
 export default async function Home() {
   const events = await getEvents();
 
-  // Prioritize the active tournament.
+  // Preserve existing tournament prioritization.
   const event =
     events.find((item) => item.status === "active") ??
     events.find((item) => item.status === "completed") ??
     events[0];
 
-  // EMPTY STATE
+  /* ---------------------------------------
+     Empty state
+  --------------------------------------- */
+
   if (!event) {
     return (
-      <main className="min-h-screen bg-slate-950 text-white">
-        {/* Keep realtime mounted even in the empty state */}
-        <div className="mx-auto max-w-7xl px-6 pt-5">
+      <main className="min-h-screen bg-[#0B0F14] text-white">
+        {/* Preserve global realtime connection. */}
+        <div className="mx-auto max-w-[1440px] px-5 pt-5 md:px-8 xl:px-12">
           <HomeRealtime />
         </div>
 
-        <div className="mx-auto flex min-h-[75vh] max-w-7xl flex-col items-center justify-center px-6 text-center">
-          <div className="mb-6 flex h-24 w-24 items-center justify-center rounded-3xl border border-blue-800 bg-blue-950/40 text-5xl">
-            ⚽
+        <section className="relative flex min-h-[75vh] items-center justify-center overflow-hidden px-6">
+          <div className="pointer-events-none absolute h-[450px] w-[450px] rounded-full bg-[#F5C66C]/[0.035] blur-[100px]" />
+
+          <div className="relative max-w-2xl text-center">
+            <div className="mx-auto mb-8 flex h-20 w-20 items-center justify-center rounded-[22px] border border-[#F5C66C]/25 bg-[#F5C66C]/10 text-[#F5C66C]">
+              <Trophy size={36} strokeWidth={1.4} />
+            </div>
+
+            <p className="mb-4 text-[11px] font-bold uppercase tracking-[0.3em] text-[#F5C66C]">
+              Welcome to Football Cup
+            </p>
+
+            <h1 className="font-heading text-4xl font-bold tracking-[-0.06em] sm:text-6xl">
+              Football lives here.
+            </h1>
+
+            <p className="mx-auto mt-6 max-w-lg text-sm leading-8 text-[#95A2AE]">
+              Your destination for tournament coverage, live
+              football scores, standings and match updates.
+              Tournaments will appear here once published.
+            </p>
+
+            <Link
+              href="/events"
+              className="mt-9 inline-flex items-center gap-3 rounded-lg bg-[#F5C66C] px-6 py-3.5 text-[13px] font-extrabold text-[#11161C] transition hover:bg-[#FFDA91]"
+            >
+              Explore Tournaments
+              <ArrowUpRight size={17} />
+            </Link>
           </div>
-
-          <h1 className="text-4xl font-black sm:text-5xl">
-            Football Tournament Hub
-          </h1>
-
-          <p className="mt-5 max-w-lg text-slate-400">
-            Your destination for live football scores, tournament
-            standings and match updates. Tournaments will appear here
-            once they are published.
-          </p>
-
-          <Link
-            href="/events"
-            className="mt-8 rounded-xl bg-blue-600 px-7 py-3 font-bold transition hover:bg-blue-500"
-          >
-            Explore Tournaments →
-          </Link>
-        </div>
+        </section>
       </main>
     );
   }
+
+  /* ---------------------------------------
+     Existing data processing
+  --------------------------------------- */
 
   const standings = await getStandings(event.id);
 
@@ -120,236 +216,288 @@ export default async function Home() {
   );
 
   return (
-    <main className="min-h-screen bg-slate-950 text-white">
-      {/* GLOBAL REALTIME CONNECTION */}
-      {/* This is now inside the ACTUAL homepage return */}
+    <main className="min-h-screen overflow-hidden bg-[#0B0F14] text-[#F4F6F8]">
 
-      <div className="mx-auto max-w-7xl px-6 pt-5">
+      {/* =====================================
+          GLOBAL REALTIME
+          Existing component remains mounted.
+      ===================================== */}
+
+      <div className="mx-auto max-w-[1440px] px-5 pt-4 md:px-8 xl:px-12">
         <HomeRealtime />
       </div>
 
-      {/* HERO */}
+      {/* =====================================
+          HERO
+      ===================================== */}
 
-      <section className="relative overflow-hidden border-b border-slate-800 bg-slate-950">
-        <div className="pointer-events-none absolute -right-24 -top-40 h-[500px] w-[500px] rounded-full bg-blue-600/10 blur-3xl" />
+      <section className="relative overflow-hidden border-b border-white/[0.06]">
+        {/* Background details */}
 
-        <div className="pointer-events-none absolute -bottom-40 left-0 h-[400px] w-[400px] rounded-full bg-purple-600/10 blur-3xl" />
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_75%_30%,rgba(245,198,108,0.065),transparent_48%)]" />
 
-        <div className="relative mx-auto grid max-w-7xl items-center gap-12 px-6 py-16 lg:grid-cols-[1.2fr_0.8fr] lg:py-24">
+        <div className="pointer-events-none absolute right-[-140px] top-[-100px] h-[520px] w-[520px] rounded-full border border-white/[0.035]" />
+
+        <div className="pointer-events-none absolute right-[-50px] top-[-10px] h-[350px] w-[350px] rounded-full border border-white/[0.035]" />
+
+        <div className="relative mx-auto grid max-w-[1440px] items-center gap-12 px-5 py-16 md:px-8 lg:grid-cols-[1.12fr_0.88fr] lg:py-24 xl:px-12">
+
+          {/* Hero copy */}
+
           <div>
-            <div className="mb-7 inline-flex items-center gap-2 rounded-full border border-blue-800 bg-blue-950/40 px-4 py-2 text-xs font-bold uppercase tracking-widest text-blue-300">
-              <span className="h-2 w-2 rounded-full bg-blue-400" />
-              Football Tournament Hub
+            <div className="mb-8 inline-flex items-center gap-3 rounded-full border border-[#F5C66C]/20 bg-[#F5C66C]/[0.055] px-4 py-2.5">
+              <span className="relative flex h-2 w-2">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#F5C66C]/50" />
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-[#F5C66C]" />
+              </span>
+
+              <span className="text-[10px] font-extrabold uppercase tracking-[0.2em] text-[#F5C66C]">
+                The Home of Tournament Football
+              </span>
             </div>
 
-            <h1 className="max-w-3xl text-5xl font-black leading-tight tracking-tight sm:text-6xl lg:text-7xl">
-              Every Match.
+            <h1 className="font-heading max-w-[760px] text-[clamp(48px,5.7vw,86px)] font-bold leading-[1.04] tracking-[-0.075em] text-white">
+              THE GAME.
               <br />
-              Every Moment.
+
+              THE GLORY.
               <br />
-              <span className="text-blue-400">
-                Live.
+
+              <span className="text-[#F5C66C]">
+                THE MOMENT.
               </span>
             </h1>
 
-            <p className="mt-7 max-w-xl text-base leading-8 text-slate-400">
-              Follow your favourite tournaments, track live
-              scores, explore match results and stay updated
-              with the latest league standings.
+            <p className="mt-8 max-w-[500px] text-[14px] leading-[1.95] text-[#9AA6B2] sm:text-[15px]">
+              Every fixture tells a story. Follow your favourite
+              tournaments, experience real-time match coverage
+              and stay connected to every defining moment.
             </p>
 
-            <div className="mt-9 flex flex-wrap gap-4">
+            <div className="mt-9 flex flex-wrap items-center gap-3">
               <Link
                 href="/live"
-                className="rounded-xl bg-blue-600 px-7 py-3.5 text-sm font-bold transition hover:bg-blue-500"
+                className="group inline-flex items-center gap-3 rounded-lg bg-[#F5C66C] px-6 py-3.5 text-[12px] font-extrabold uppercase tracking-[0.045em] text-[#11161C] transition hover:bg-[#FFDA91]"
               >
-                ● Watch Live Scores →
+                <Radio size={17} />
+                Watch Live Scores
+
+                <ArrowUpRight
+                  size={16}
+                  className="transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5"
+                />
               </Link>
 
               <Link
                 href="/events"
-                className="rounded-xl border border-slate-700 bg-slate-900 px-7 py-3.5 text-sm font-bold transition hover:border-blue-500"
+                className="inline-flex items-center gap-3 rounded-lg border border-[#394550] bg-[#1B232C] px-6 py-3.5 text-[12px] font-bold uppercase tracking-[0.045em] text-white transition hover:border-[#F5C66C]/50"
               >
                 Explore Tournaments
+                <ArrowRight size={16} />
               </Link>
             </div>
 
-            <p className="mt-7 text-xs text-slate-500">
-              No registration required. All tournament
-              information is publicly accessible.
-            </p>
+            <div className="mt-10 flex items-center gap-3 border-t border-white/[0.07] pt-6">
+              <CircleDot size={15} className="text-[#F5C66C]" />
+
+              <span className="text-[11px] font-medium text-[#7F8D9A]">
+                Real-time scores. Tournament coverage. No registration required.
+              </span>
+            </div>
           </div>
 
-          {/* FEATURED TOURNAMENT */}
+          {/* Featured tournament */}
 
-          <div className="overflow-hidden rounded-3xl border border-slate-700 bg-slate-900 shadow-2xl">
-            <div className="border-b border-slate-800 bg-slate-800/40 px-6 py-5">
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-xs font-bold uppercase tracking-widest text-slate-400">
-                  Featured Tournament
-                </span>
+          <div className="relative">
+            <div className="pointer-events-none absolute -inset-3 rounded-[26px] border border-[#F5C66C]/[0.07]" />
 
-                <span
-                  className={`rounded-full border px-3 py-1 text-xs font-bold uppercase ${statusStyle(
-                    event.status
-                  )}`}
+            <div className="relative overflow-hidden rounded-[20px] border border-[#3B444C] bg-[#171E26] shadow-[0_30px_90px_rgba(0,0,0,0.35)]">
+
+              <div className="relative flex min-h-[150px] flex-col justify-between overflow-hidden border-b border-white/[0.07] bg-[linear-gradient(135deg,#303037,#202A34_65%,#171E26)] p-7">
+                <div className="pointer-events-none absolute -right-5 -top-12 text-[#F5C66C]/[0.06]">
+                  <Trophy size={220} strokeWidth={0.8} />
+                </div>
+
+                <div className="relative flex items-center justify-between gap-3">
+                  <span className="text-[10px] font-extrabold uppercase tracking-[0.22em] text-[#BBC5CE]">
+                    Featured Competition
+                  </span>
+
+                  <span
+                    className={`rounded-full border px-3 py-1 text-[10px] font-extrabold uppercase tracking-[0.1em] ${statusStyle(event.status)}`}
+                  >
+                    {event.status}
+                  </span>
+                </div>
+
+                <div className="relative mt-9 flex items-end justify-between">
+                  <Trophy size={35} strokeWidth={1.4} className="text-[#F5C66C]" />
+
+                  <span className="font-mono text-[11px] tracking-widest text-[#A7B0B9]">
+                    FC / {String(event.id).padStart(3, "0")}
+                  </span>
+                </div>
+              </div>
+
+              <div className="p-7">
+                <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.2em] text-[#F5C66C]">
+                  Official Tournament
+                </p>
+
+                <h2 className="font-heading text-[28px] font-bold leading-tight tracking-[-0.055em] text-white sm:text-[34px]">
+                  {event.name}
+                </h2>
+
+                <p className="mt-4 line-clamp-3 min-h-[48px] text-[13px] leading-6 text-[#92A0AC]">
+                  {event.description ||
+                    "Follow the fixtures, live results and tournament standings."}
+                </p>
+
+                <div className="mt-7 grid grid-cols-3 divide-x divide-white/[0.07] border-y border-white/[0.07] py-5">
+                  <div>
+                    <p className="font-mono text-[28px] font-bold text-white">
+                      {event.teams.length}
+                    </p>
+                    <p className="mt-1 text-[10px] uppercase tracking-wider text-[#81909E]">
+                      Teams
+                    </p>
+                  </div>
+
+                  <div className="pl-5">
+                    <p className="font-mono text-[28px] font-bold text-white">
+                      {matches.length}
+                    </p>
+                    <p className="mt-1 text-[10px] uppercase tracking-wider text-[#81909E]">
+                      Matches
+                    </p>
+                  </div>
+
+                  <div className="pl-5">
+                    <p className="font-mono text-[28px] font-bold text-[#F5C66C]">
+                      {liveMatches.length}
+                    </p>
+                    <p className="mt-1 text-[10px] uppercase tracking-wider text-[#81909E]">
+                      Live Now
+                    </p>
+                  </div>
+                </div>
+
+                <Link
+                  href={`/events/${event.id}`}
+                  className="group mt-6 flex items-center justify-between rounded-lg bg-[#F5C66C] px-5 py-3.5 text-[12px] font-extrabold uppercase tracking-[0.05em] text-[#11161C] transition hover:bg-[#FFDA91]"
                 >
-                  {event.status}
-                </span>
+                  View Tournament
+
+                  <ArrowUpRight
+                    size={18}
+                    className="transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5"
+                  />
+                </Link>
               </div>
-            </div>
-
-            <div className="p-7">
-              <div className="mb-6 flex h-16 w-16 items-center justify-center rounded-2xl border border-blue-800 bg-blue-950/40 text-3xl">
-                🏆
-              </div>
-
-              <h2 className="text-2xl font-black">
-                {event.name}
-              </h2>
-
-              <p className="mt-3 line-clamp-3 min-h-12 text-sm leading-6 text-slate-400">
-                {event.description ||
-                  "Follow the fixtures, live results and tournament standings."}
-              </p>
-
-              <div className="mt-7 grid grid-cols-3 gap-3 border-y border-slate-800 py-6 text-center">
-                <div>
-                  <p className="text-2xl font-black">
-                    {event.teams.length}
-                  </p>
-
-                  <p className="mt-1 text-xs text-slate-500">
-                    Teams
-                  </p>
-                </div>
-
-                <div>
-                  <p className="text-2xl font-black">
-                    {matches.length}
-                  </p>
-
-                  <p className="mt-1 text-xs text-slate-500">
-                    Matches
-                  </p>
-                </div>
-
-                <div>
-                  <p className="text-2xl font-black text-red-400">
-                    {liveMatches.length}
-                  </p>
-
-                  <p className="mt-1 text-xs text-slate-500">
-                    Live Now
-                  </p>
-                </div>
-              </div>
-
-              <Link
-                href={`/events/${event.id}`}
-                className="mt-6 block rounded-xl bg-blue-600 px-5 py-3.5 text-center text-sm font-bold transition hover:bg-blue-500"
-              >
-                View Tournament →
-              </Link>
             </div>
           </div>
         </div>
       </section>
 
-      <div className="mx-auto max-w-7xl space-y-16 px-6 py-14">
+      {/* =====================================
+          MAIN CONTENT
+      ===================================== */}
+
+      <div className="mx-auto max-w-[1440px] space-y-20 px-5 py-14 md:px-8 lg:py-20 xl:px-12">
+
         {/* QUICK STATS */}
 
-        <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <section className="grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-5">
           {[
             {
               label: "Tournaments",
               value: events.length,
-              icon: "🏆",
+              icon: Trophy,
+              detail: "Competitions",
             },
             {
               label: "Registered Teams",
               value: event.teams.length,
-              icon: "🛡️",
+              icon: Shield,
+              detail: "Participants",
             },
             {
               label: "Total Fixtures",
               value: matches.length,
-              icon: "⚽",
+              icon: CalendarDays,
+              detail: "Scheduled & played",
             },
             {
               label: "Live Matches",
               value: liveMatches.length,
-              icon: "🔴",
+              icon: Radio,
+              detail: "In progress",
             },
-          ].map((stat) => (
-            <div
-              key={stat.label}
-              className="rounded-2xl border border-slate-800 bg-slate-900 p-6"
-            >
-              <div className="flex items-center justify-between">
-                <p className="text-sm text-slate-400">
-                  {stat.label}
+          ].map((stat) => {
+            const Icon = stat.icon;
+
+            return (
+              <div
+                key={stat.label}
+                className="group rounded-xl border border-[#2B3641] bg-[#151C24] p-5 transition hover:border-[#F5C66C]/30 sm:p-6"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#95A2AE]">
+                    {stat.label}
+                  </p>
+
+                  <Icon
+                    size={19}
+                    strokeWidth={1.5}
+                    className="shrink-0 text-[#F5C66C]"
+                  />
+                </div>
+
+                <p className="mt-6 font-mono text-[34px] font-bold leading-none tracking-[-0.07em] text-white sm:text-[42px]">
+                  {stat.value}
                 </p>
 
-                <span className="text-xl">
-                  {stat.icon}
-                </span>
+                <p className="mt-3 text-[11px] text-[#71808F]">
+                  {stat.detail}
+                </p>
               </div>
-
-              <p className="mt-4 text-3xl font-black">
-                {stat.value}
-              </p>
-            </div>
-          ))}
+            );
+          })}
         </section>
 
-        {/* MATCH HIGHLIGHTS */}
+        {/* MATCH CENTRE */}
 
         <section>
-          <div className="mb-7 flex flex-wrap items-end justify-between gap-4">
-            <div>
-              <p className="text-xs font-bold uppercase tracking-widest text-blue-400">
-                Match Centre
-              </p>
-
-              <h2 className="mt-2 text-3xl font-black">
-                Match Highlights
-              </h2>
-
-              <p className="mt-2 text-sm text-slate-400">
-                Live action, upcoming fixtures and recent results.
-              </p>
-            </div>
-
-            <Link
-              href="/matches"
-              className="text-sm font-bold text-blue-400 hover:text-blue-300"
-            >
-              View All Matches →
-            </Link>
-          </div>
+          <SectionHeading
+            eyebrow="The Match Centre"
+            title="Match Highlights"
+            description="The action that matters. Live games, upcoming encounters and the latest results."
+            href="/matches"
+            linkLabel="All Matches"
+          />
 
           {highlightedMatches.length === 0 ? (
-            <div className="rounded-2xl border border-slate-800 bg-slate-900 p-10 text-center text-slate-400">
+            <div className="rounded-xl border border-[#2B3641] bg-[#151C24] px-6 py-14 text-center text-sm text-[#8E9BA8]">
               No fixtures have been scheduled yet.
             </div>
           ) : (
-            <div className="grid gap-5 lg:grid-cols-2">
+            <div className="grid gap-4 lg:grid-cols-2">
               {highlightedMatches.map((match) => (
                 <Link
                   key={match.id}
                   href={`/matches/${match.id}`}
-                  className="group rounded-2xl border border-slate-800 bg-slate-900 p-6 transition hover:-translate-y-1 hover:border-blue-700"
+                  className="group overflow-hidden rounded-xl border border-[#2B3641] bg-[#151C24] transition hover:-translate-y-0.5 hover:border-[#F5C66C]/40 hover:bg-[#19212A]"
                 >
-                  <div className="mb-7 flex items-center justify-between gap-3">
-                    <span className="truncate text-xs text-slate-500">
-                      {match.venue || "Venue TBA"}
+                  <div className="flex items-center justify-between gap-3 border-b border-white/[0.06] px-5 py-4 sm:px-6">
+                    <span className="flex min-w-0 items-center gap-2 text-[11px] text-[#8795A3]">
+                      <MapPin size={13} className="shrink-0" />
+                      <span className="truncate">
+                        {match.venue || "Venue TBA"}
+                      </span>
                     </span>
 
                     <span
-                      className={`shrink-0 rounded-full border px-3 py-1 text-xs font-bold uppercase ${statusStyle(
-                        match.status
-                      )}`}
+                      className={`shrink-0 rounded-full border px-3 py-1 text-[10px] font-extrabold uppercase tracking-[0.1em] ${statusStyle(match.status)}`}
                     >
                       {match.status === "live"
                         ? "● Live"
@@ -359,27 +507,37 @@ export default async function Home() {
                     </span>
                   </div>
 
-                  <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3 text-center">
+                  <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3 px-4 py-8 text-center sm:px-7">
+                    {/* Home team */}
+
                     <div className="min-w-0">
-                      <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-blue-950/60 font-black text-blue-300">
+                      <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-xl border border-[#F5C66C]/20 bg-[#F5C66C]/[0.065] font-heading text-sm font-bold text-[#F5C66C]">
                         {match.home_team.code}
                       </div>
 
-                      <p className="break-words text-sm font-bold sm:text-base">
+                      <p className="break-words text-[12px] font-bold text-white sm:text-[14px]">
                         {match.home_team.name}
+                      </p>
+
+                      <p className="mt-1 text-[10px] uppercase tracking-wider text-[#697887]">
+                        Home
                       </p>
                     </div>
 
-                    <div>
-                      <p className="whitespace-nowrap text-3xl font-black tabular-nums">
+                    {/* Score */}
+
+                    <div className="min-w-[90px]">
+                      <div className="font-mono whitespace-nowrap text-[30px] font-bold tracking-[-0.075em] text-white sm:text-[39px]">
                         {match.home_score}
-                        <span className="mx-2 text-slate-600">
+
+                        <span className="mx-2 font-normal text-[#566574]">
                           :
                         </span>
-                        {match.away_score}
-                      </p>
 
-                      <p className="mt-2 text-xs text-slate-500">
+                        {match.away_score}
+                      </div>
+
+                      <p className="mt-2 text-[10px] font-extrabold uppercase tracking-[0.18em] text-[#F5C66C]">
                         {match.status === "scheduled"
                           ? "VS"
                           : match.status === "live"
@@ -388,22 +546,35 @@ export default async function Home() {
                       </p>
                     </div>
 
+                    {/* Away team */}
+
                     <div className="min-w-0">
-                      <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-purple-950/60 font-black text-purple-300">
+                      <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-xl border border-[#4E6073] bg-[#273443] font-heading text-sm font-bold text-[#CED8E2]">
                         {match.away_team.code}
                       </div>
 
-                      <p className="break-words text-sm font-bold sm:text-base">
+                      <p className="break-words text-[12px] font-bold text-white sm:text-[14px]">
                         {match.away_team.name}
+                      </p>
+
+                      <p className="mt-1 text-[10px] uppercase tracking-wider text-[#697887]">
+                        Away
                       </p>
                     </div>
                   </div>
 
-                  <div className="mt-7 border-t border-slate-800 pt-4 text-center text-xs text-slate-500">
-                    {formatDate(match.scheduled_at)}
+                  <div className="flex flex-wrap items-center justify-between gap-3 border-t border-white/[0.06] px-5 py-4 sm:px-6">
+                    <span className="flex items-center gap-2 text-[11px] text-[#81909E]">
+                      <Clock3 size={13} />
+                      {formatDate(match.scheduled_at)}
+                    </span>
 
-                    <span className="ml-3 font-bold text-blue-400 transition group-hover:text-blue-300">
-                      Match Details →
+                    <span className="flex items-center gap-1.5 text-[11px] font-bold text-[#F5C66C]">
+                      Match Details
+                      <ChevronRight
+                        size={14}
+                        className="transition-transform group-hover:translate-x-1"
+                      />
                     </span>
                   </div>
                 </Link>
@@ -415,61 +586,64 @@ export default async function Home() {
         {/* UPCOMING FIXTURES */}
 
         <section>
-          <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
-            <div>
-              <p className="text-xs font-bold uppercase tracking-widest text-blue-400">
-                Coming Up
-              </p>
-
-              <h2 className="mt-2 text-3xl font-black">
-                Upcoming Fixtures
-              </h2>
-            </div>
-
-            <Link
-              href="/matches"
-              className="text-sm font-bold text-blue-400 hover:text-blue-300"
-            >
-              Full Schedule →
-            </Link>
-          </div>
+          <SectionHeading
+            eyebrow="On the Calendar"
+            title="Upcoming Fixtures"
+            description="Keep track of the next encounters in the competition."
+            href="/matches"
+            linkLabel="Full Schedule"
+          />
 
           {upcomingMatches.length === 0 ? (
-            <div className="rounded-2xl border border-slate-800 bg-slate-900 px-6 py-8 text-sm text-slate-400">
+            <div className="rounded-xl border border-[#2B3641] bg-[#151C24] px-6 py-9 text-[13px] text-[#8E9BA8]">
               No upcoming matches are currently scheduled.
             </div>
           ) : (
-            <div className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900">
+            <div className="overflow-hidden rounded-xl border border-[#2B3641] bg-[#151C24]">
               {upcomingMatches.slice(0, 5).map((match) => (
                 <Link
                   key={match.id}
                   href={`/matches/${match.id}`}
-                  className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-800 px-6 py-5 transition last:border-0 hover:bg-slate-800/50"
+                  className="group flex flex-wrap items-center justify-between gap-4 border-b border-white/[0.06] px-5 py-5 transition last:border-0 hover:bg-white/[0.025] sm:px-7"
                 >
-                  <div>
-                    <p className="font-bold">
-                      {match.home_team.name}
+                  <div className="flex items-center gap-4">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-[#F5C66C]/20 bg-[#F5C66C]/[0.06] text-[#F5C66C]">
+                      <CalendarDays size={17} />
+                    </div>
 
-                      <span className="mx-3 text-slate-600">
-                        vs
-                      </span>
+                    <div>
+                      <p className="text-[13px] font-bold text-white sm:text-sm">
+                        {match.home_team.name}
 
-                      {match.away_team.name}
-                    </p>
+                        <span className="mx-2 font-medium text-[#6F7D8A]">
+                          vs
+                        </span>
 
-                    <p className="mt-2 text-xs text-slate-500">
-                      {match.venue || "Venue TBA"}
-                    </p>
+                        {match.away_team.name}
+                      </p>
+
+                      <p className="mt-1.5 flex items-center gap-1.5 text-[11px] text-[#81909E]">
+                        <MapPin size={11} />
+                        {match.venue || "Venue TBA"}
+                      </p>
+                    </div>
                   </div>
 
-                  <div className="text-right">
-                    <p className="text-sm font-semibold text-slate-300">
-                      {formatDate(match.scheduled_at)}
-                    </p>
+                  <div className="flex items-center gap-5">
+                    <div className="text-right">
+                      <p className="text-[12px] font-semibold text-[#CED5DC]">
+                        {formatDate(match.scheduled_at)}
+                      </p>
 
-                    <p className="mt-1 text-xs text-blue-400">
-                      View Fixture →
-                    </p>
+                      <p className="mt-1 text-[10px] font-bold uppercase tracking-wider text-[#F5C66C]">
+                        View Fixture
+                      </p>
+                    </div>
+
+                    <ChevronRight
+                      size={17}
+                      className="hidden text-[#F5C66C] transition-transform group-hover:translate-x-1 sm:block"
+                    />
                   </div>
                 </Link>
               ))}
@@ -480,77 +654,60 @@ export default async function Home() {
         {/* REGISTERED TEAMS */}
 
         <section>
-          <div className="mb-7">
-            <p className="text-xs font-bold uppercase tracking-widest text-blue-400">
-              Tournament Participants
-            </p>
+          <SectionHeading
+            eyebrow="The Competitors"
+            title="Registered Teams"
+            description={`The clubs competing in ${event.name}.`}
+          />
 
-            <h2 className="mt-2 text-3xl font-black">
-              Registered Teams
-            </h2>
+          {event.teams.length === 0 ? (
+            <div className="rounded-xl border border-[#2B3641] bg-[#151C24] p-8 text-sm text-[#8E9BA8]">
+              No teams have registered for this tournament yet.
+            </div>
+          ) : (
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              {event.teams.map((team) => (
+                <div
+                  key={team.id}
+                  className="group flex items-center gap-4 rounded-xl border border-[#2B3641] bg-[#151C24] p-5 transition hover:border-[#F5C66C]/30"
+                >
+                  <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg border border-[#F5C66C]/20 bg-[#F5C66C]/[0.07] font-heading text-[13px] font-bold text-[#F5C66C]">
+                    {team.code.slice(0, 3)}
+                  </div>
 
-            <p className="mt-2 text-sm text-slate-400">
-              Teams competing in {event.name}.
-            </p>
-          </div>
+                  <div className="min-w-0">
+                    <h3 className="truncate text-[13px] font-bold text-white">
+                      {team.name}
+                    </h3>
 
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            {event.teams.map((team) => (
-              <div
-                key={team.id}
-                className="flex items-center gap-4 rounded-2xl border border-slate-800 bg-slate-900 p-5"
-              >
-                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-blue-900 bg-blue-950/40 font-black text-blue-300">
-                  {team.code.slice(0, 3)}
+                    <p className="mt-1 text-[10px] font-semibold uppercase tracking-[0.15em] text-[#758392]">
+                      {team.code}
+                    </p>
+                  </div>
                 </div>
-
-                <div className="min-w-0">
-                  <h3 className="truncate font-bold">
-                    {team.name}
-                  </h3>
-
-                  <p className="mt-1 text-xs uppercase tracking-widest text-slate-500">
-                    {team.code}
-                  </p>
-                </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </section>
 
         {/* STANDINGS */}
 
         <section>
-          <div className="mb-7 flex flex-wrap items-end justify-between gap-4">
-            <div>
-              <p className="text-xs font-bold uppercase tracking-widest text-blue-400">
-                League Table
-              </p>
+          <SectionHeading
+            eyebrow="The League Table"
+            title="Tournament Standings"
+            description={`Current rankings and team performance for ${event.name}.`}
+            href={`/events/${event.id}`}
+            linkLabel="Tournament Details"
+          />
 
-              <h2 className="mt-2 text-3xl font-black">
-                Tournament Standings
-              </h2>
-
-              <p className="mt-2 text-sm text-slate-400">
-                Current rankings for {event.name}.
-              </p>
-            </div>
-
-            <Link
-              href={`/events/${event.id}`}
-              className="text-sm font-bold text-blue-400 hover:text-blue-300"
-            >
-              Tournament Details →
-            </Link>
-          </div>
-
-          <div className="overflow-hidden rounded-2xl border border-slate-800 bg-slate-900">
+          <div className="overflow-hidden rounded-xl border border-[#2B3641] bg-[#151C24]">
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[750px] text-left text-sm">
-                <thead className="border-b border-slate-800 bg-slate-950/60 text-xs uppercase tracking-wider text-slate-400">
+              <table className="w-full min-w-[750px] text-left text-[12px]">
+                <thead className="border-b border-[#2B3641] bg-[#1D2630] text-[10px] font-extrabold uppercase tracking-[0.12em] text-[#91A0AE]">
                   <tr>
                     <th className="px-5 py-4">#</th>
-                    <th className="px-5 py-4">Team</th>
+                    <th className="px-5 py-4">Club</th>
                     <th className="px-4 py-4 text-center">P</th>
                     <th className="px-4 py-4 text-center">W</th>
                     <th className="px-4 py-4 text-center">D</th>
@@ -558,7 +715,7 @@ export default async function Home() {
                     <th className="px-4 py-4 text-center">GF</th>
                     <th className="px-4 py-4 text-center">GA</th>
                     <th className="px-4 py-4 text-center">GD</th>
-                    <th className="px-5 py-4 text-center">Pts</th>
+                    <th className="px-5 py-4 text-center">PTS</th>
                   </tr>
                 </thead>
 
@@ -566,45 +723,53 @@ export default async function Home() {
                   {standings.map((standing, index) => (
                     <tr
                       key={standing.team_id}
-                      className="border-b border-slate-800 transition last:border-0 hover:bg-slate-800/40"
+                      className="border-b border-white/[0.055] transition last:border-0 hover:bg-white/[0.025]"
                     >
-                      <td className="px-5 py-4 text-slate-500">
-                        {index + 1}
+                      <td className="px-5 py-4">
+                        <span
+                          className={`flex h-7 w-7 items-center justify-center rounded-md font-mono text-[11px] font-bold ${
+                            index === 0
+                              ? "bg-[#F5C66C] text-[#11161C]"
+                              : "bg-[#27313C] text-[#91A0AE]"
+                          }`}
+                        >
+                          {index + 1}
+                        </span>
                       </td>
 
-                      <td className="px-5 py-4 font-bold">
+                      <td className="px-5 py-4 text-[13px] font-bold text-white">
                         {standing.team}
                       </td>
 
-                      <td className="px-4 py-4 text-center">
+                      <td className="px-4 py-4 text-center text-[#B8C3CC]">
                         {standing.played}
                       </td>
 
-                      <td className="px-4 py-4 text-center">
+                      <td className="px-4 py-4 text-center text-[#B8C3CC]">
                         {standing.won}
                       </td>
 
-                      <td className="px-4 py-4 text-center">
+                      <td className="px-4 py-4 text-center text-[#B8C3CC]">
                         {standing.drawn}
                       </td>
 
-                      <td className="px-4 py-4 text-center">
+                      <td className="px-4 py-4 text-center text-[#B8C3CC]">
                         {standing.lost}
                       </td>
 
-                      <td className="px-4 py-4 text-center">
+                      <td className="px-4 py-4 text-center text-[#B8C3CC]">
                         {standing.goals_for}
                       </td>
 
-                      <td className="px-4 py-4 text-center">
+                      <td className="px-4 py-4 text-center text-[#B8C3CC]">
                         {standing.goals_against}
                       </td>
 
-                      <td className="px-4 py-4 text-center">
+                      <td className="px-4 py-4 text-center text-[#B8C3CC]">
                         {standing.goal_difference}
                       </td>
 
-                      <td className="px-5 py-4 text-center font-black text-blue-400">
+                      <td className="px-5 py-4 text-center font-mono text-[14px] font-bold text-[#F5C66C]">
                         {standing.points}
                       </td>
                     </tr>
@@ -614,16 +779,15 @@ export default async function Home() {
             </div>
 
             {standings.length === 0 && (
-              <div className="px-6 py-10 text-center text-sm text-slate-500">
+              <div className="px-6 py-10 text-center text-sm text-[#8E9BA8]">
                 Standings are not available yet.
               </div>
             )}
           </div>
 
-          <p className="mt-3 text-xs text-slate-500">
+          <p className="mt-3 text-[10px] leading-5 text-[#758392]">
             P: Played · W: Won · D: Drawn · L: Lost ·
-            GF: Goals For · GA: Goals Against ·
-            GD: Goal Difference
+            GF: Goals For · GA: Goals Against · GD: Goal Difference
           </p>
         </section>
 
@@ -631,56 +795,53 @@ export default async function Home() {
 
         {otherEvents.length > 0 && (
           <section>
-            <div className="mb-7 flex items-end justify-between gap-4">
-              <div>
-                <p className="text-xs font-bold uppercase tracking-widest text-blue-400">
-                  Discover More
-                </p>
+            <SectionHeading
+              eyebrow="Discover More"
+              title="Other Tournaments"
+              description="Explore more competitions across the platform."
+              href="/events"
+              linkLabel="View All"
+            />
 
-                <h2 className="mt-2 text-3xl font-black">
-                  Other Tournaments
-                </h2>
-              </div>
-
-              <Link
-                href="/events"
-                className="text-sm font-bold text-blue-400 hover:text-blue-300"
-              >
-                View All →
-              </Link>
-            </div>
-
-            <div className="grid gap-5 md:grid-cols-2 lg:grid-cols-3">
+            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
               {otherEvents.slice(0, 3).map((item) => (
                 <Link
                   key={item.id}
                   href={`/events/${item.id}`}
-                  className="rounded-2xl border border-slate-800 bg-slate-900 p-6 transition hover:border-blue-700"
+                  className="group rounded-xl border border-[#2B3641] bg-[#151C24] p-6 transition hover:-translate-y-0.5 hover:border-[#F5C66C]/35"
                 >
-                  <span className="text-3xl">
-                    🏆
-                  </span>
+                  <div className="mb-6 flex items-start justify-between">
+                    <div className="flex h-12 w-12 items-center justify-center rounded-lg border border-[#F5C66C]/20 bg-[#F5C66C]/[0.07] text-[#F5C66C]">
+                      <Trophy size={23} strokeWidth={1.5} />
+                    </div>
 
-                  <h3 className="mt-5 text-lg font-bold">
+                    <span
+                      className={`rounded-full border px-3 py-1 text-[10px] font-extrabold uppercase ${statusStyle(item.status)}`}
+                    >
+                      {item.status}
+                    </span>
+                  </div>
+
+                  <h3 className="font-heading text-xl font-bold tracking-[-0.04em] text-white">
                     {item.name}
                   </h3>
 
-                  <p className="mt-3 line-clamp-2 text-sm leading-6 text-slate-400">
+                  <p className="mt-3 line-clamp-2 min-h-12 text-[12px] leading-6 text-[#8E9BA8]">
                     {item.description ||
                       "Explore tournament details and fixtures."}
                   </p>
 
-                  <div className="mt-6 flex items-center justify-between">
-                    <span
-                      className={`rounded-full border px-3 py-1 text-xs font-bold uppercase ${statusStyle(
-                        item.status
-                      )}`}
-                    >
-                      {item.status}
+                  <div className="mt-6 flex items-center justify-between border-t border-white/[0.07] pt-5">
+                    <span className="text-[10px] font-bold uppercase tracking-[0.13em] text-[#71808F]">
+                      Competition
                     </span>
 
-                    <span className="text-sm font-semibold text-blue-400">
-                      Explore →
+                    <span className="flex items-center gap-1.5 text-[12px] font-bold text-[#F5C66C]">
+                      Explore
+                      <ArrowUpRight
+                        size={15}
+                        className="transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5"
+                      />
                     </span>
                   </div>
                 </Link>
@@ -691,36 +852,76 @@ export default async function Home() {
 
         {/* BOTTOM CTA */}
 
-        <section className="rounded-3xl border border-blue-900 bg-gradient-to-r from-blue-950/70 to-slate-900 px-7 py-12 text-center sm:px-12">
-          <p className="text-xs font-bold uppercase tracking-widest text-blue-400">
-            Never Miss a Moment
-          </p>
+        <section className="relative overflow-hidden rounded-[20px] border border-[#F5C66C]/20 bg-[linear-gradient(115deg,#25272B,#1B232C_60%,#151C24)] px-7 py-12 text-center sm:px-12 sm:py-16">
+          <div className="pointer-events-none absolute -right-16 -top-20 text-[#F5C66C]/[0.04]">
+            <Trophy size={300} strokeWidth={0.8} />
+          </div>
 
-          <h2 className="mt-4 text-3xl font-black sm:text-4xl">
-            Follow the Action Live
-          </h2>
+          <div className="relative">
+            <p className="text-[10px] font-extrabold uppercase tracking-[0.25em] text-[#F5C66C]">
+              Never Miss a Moment
+            </p>
 
-          <p className="mx-auto mt-4 max-w-xl text-sm leading-7 text-slate-400">
-            Watch match scores change in realtime, follow every
-            important event and explore the latest tournament
-            results without creating an account.
-          </p>
+            <h2 className="font-heading mt-4 text-[32px] font-bold tracking-[-0.055em] text-white sm:text-[46px]">
+              Every second counts.
+            </h2>
 
-          <Link
-            href="/live"
-            className="mt-7 inline-block rounded-xl bg-blue-600 px-8 py-3.5 text-sm font-bold transition hover:bg-blue-500"
-          >
-            Open Live Scoreboard →
-          </Link>
+            <p className="mx-auto mt-4 max-w-xl text-[13px] leading-7 text-[#9AA6B2]">
+              Follow every goal, every result and every important
+              match event as it happens. Your front-row seat to
+              tournament football.
+            </p>
+
+            <Link
+              href="/live"
+              className="mt-8 inline-flex items-center gap-3 rounded-lg bg-[#F5C66C] px-7 py-3.5 text-[12px] font-extrabold uppercase tracking-[0.05em] text-[#11161C] transition hover:bg-[#FFDA91]"
+            >
+              <Radio size={17} />
+              Open Live Scoreboard
+              <ArrowUpRight size={16} />
+            </Link>
+          </div>
         </section>
       </div>
 
-      {/* FOOTER */}
+      {/* =====================================
+          FOOTER
+      ===================================== */}
 
-      <footer className="border-t border-slate-800 bg-slate-950 px-6 py-8 text-center text-xs text-slate-500">
-        Football Tournament Management System
-        <span className="mx-3 text-slate-700">•</span>
-        Live Scores & Tournament Coverage
+      <footer className="border-t border-white/[0.07] bg-[#0E1319]">
+        <div className="mx-auto flex max-w-[1440px] flex-col items-center justify-between gap-5 px-5 py-8 text-center md:flex-row md:px-8 md:text-left xl:px-12">
+          <div>
+            <p className="font-heading text-[17px] font-bold tracking-[-0.05em] text-white">
+              FOOTBALL<span className="text-[#F5C66C]">CUP.</span>
+            </p>
+
+            <p className="mt-1 text-[10px] text-[#71808F]">
+              Football Tournament Management System
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-center gap-5 text-[11px] font-medium text-[#8795A3]">
+            <Link href="/events" className="hover:text-[#F5C66C]">
+              Tournaments
+            </Link>
+
+            <Link href="/matches" className="hover:text-[#F5C66C]">
+              Fixtures
+            </Link>
+
+            <Link href="/live" className="hover:text-[#F5C66C]">
+              Live Scores
+            </Link>
+
+            <Link href="/admin" className="hover:text-[#F5C66C]">
+              Admin Portal
+            </Link>
+          </div>
+
+          <p className="text-[10px] text-[#627180]">
+            Real-time Tournament Coverage
+          </p>
+        </div>
       </footer>
     </main>
   );

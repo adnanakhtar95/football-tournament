@@ -11,7 +11,7 @@ from django.views.decorators.csrf import ensure_csrf_cookie
 
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
-from django.db.models import Count
+from django.db.models import Count ,Q
 
 from .models import (
     Event,
@@ -138,8 +138,15 @@ class TeamViewSet(viewsets.ReadOnlyModelViewSet):
 
 class PlayerViewSet(viewsets.ReadOnlyModelViewSet):
     """
-    Public endpoint for viewing registered players.
-    Supports optional filtering by team.
+    Public endpoint for registered players.
+
+    Existing:
+        GET /api/players/
+        GET /api/players/?team=5
+        GET /api/players/{id}/
+
+    New:
+        GET /api/players/{id}/profile/
     """
 
     serializer_class = PlayerSerializer
@@ -156,6 +163,142 @@ class PlayerViewSet(viewsets.ReadOnlyModelViewSet):
 
         return queryset
 
+    @action(
+        detail=True,
+        methods=["get"],
+        url_path="profile",
+    )
+    def profile(self, request, pk=None):
+        """
+        Return a registered player's public profile,
+        goal statistics and recorded goal history.
+
+        Only goal events associated with the Player FK
+        are included in individual goal statistics.
+        """
+
+        player = get_object_or_404(
+            Player.objects.select_related("team"),
+            pk=pk,
+        )
+
+        # All registered goal events belonging to this player.
+        goal_events = (
+            MatchEvent.objects
+            .filter(
+                player=player,
+                type=MatchEvent.EventType.GOAL,
+            )
+            .select_related(
+                "match__round__event",
+                "match__home_team",
+                "match__away_team",
+                "team",
+            )
+            .order_by(
+                "-match__scheduled_at",
+                "-minute",
+                "-id",
+            )
+        )
+
+        # Calculate the player's statistics.
+        total_goals = goal_events.count()
+
+        matches_scored_in = (
+            goal_events
+            .values("match_id")
+            .distinct()
+            .count()
+        )
+
+        # Count appearances based on recorded player-linked
+        # match events. This is NOT a full lineup-based
+        # appearance count.
+        recorded_matches = (
+            MatchEvent.objects
+            .filter(player=player)
+            .values("match_id")
+            .distinct()
+            .count()
+        )
+
+        # Group goals by tournament.
+        tournament_stats = (
+            goal_events
+            .values(
+                "match__round__event_id",
+                "match__round__event__name",
+            )
+            .annotate(goals=Count("id"))
+            .order_by(
+                "-goals",
+                "match__round__event__name",
+            )
+        )
+
+        tournaments = [
+            {
+                "event_id": item[
+                    "match__round__event_id"
+                ],
+                "event_name": item[
+                    "match__round__event__name"
+                ],
+                "goals": item["goals"],
+            }
+            for item in tournament_stats
+        ]
+
+        # Build the goal history.
+        goal_history = []
+
+        for goal in goal_events:
+            match = goal.match
+
+            goal_history.append({
+                "id": goal.id,
+                "match_id": match.id,
+
+                "event_id": match.round.event_id,
+                "event_name": match.round.event.name,
+
+                "home_team": {
+                    "id": match.home_team.id,
+                    "name": match.home_team.name,
+                    "code": match.home_team.code,
+                },
+
+                "away_team": {
+                    "id": match.away_team.id,
+                    "name": match.away_team.name,
+                    "code": match.away_team.code,
+                },
+
+                "home_score": match.home_score,
+                "away_score": match.away_score,
+
+                "match_status": match.status,
+                "scheduled_at": match.scheduled_at,
+
+                "minute": goal.minute,
+                "note": goal.note,
+            })
+
+        return Response({
+            "player": PlayerSerializer(player).data,
+
+            "statistics": {
+                "total_goals": total_goals,
+                "matches_scored_in": matches_scored_in,
+                "recorded_matches": recorded_matches,
+                "tournaments_scored_in": len(tournaments),
+            },
+
+            "tournaments": tournaments,
+
+            "goal_history": goal_history,
+        })
 
 class AdminEventViewSet(viewsets.ModelViewSet):
     queryset = Event.objects.all()

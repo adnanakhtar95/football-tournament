@@ -1,26 +1,297 @@
 @import "tailwindcss";
 
+/* =========================================
+   FOOTBALL CUP — DESIGN SYSTEM
+========================================= */
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  color-scheme: dark;
+
+  /* Core surfaces */
+  --background: #0b0f14;
+  --foreground: #f4f6f8;
+
+  --surface: #141b23;
+  --surface-elevated: #1c2631;
+  --surface-hover: #25313e;
+
+  /* Borders */
+  --border: #293440;
+  --border-strong: #3a4857;
+
+  /* Brand */
+  --primary: #f5c66c;
+  --primary-hover: #ffda91;
+  --primary-muted: rgba(245, 198, 108, 0.1);
+
+  /* Typography */
+  --muted: #8c9aa9;
+  --muted-light: #b7c1cc;
+
+  /* Semantic */
+  --success: #46c993;
+  --danger: #ef6672;
+  --warning: #f5c66c;
+  --info: #65a9ef;
+
+  /* Radius */
+  --radius-card: 16px;
+  --radius-button: 10px;
 }
+
+/* =========================================
+   TAILWIND THEME
+========================================= */
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+
+  --color-surface: var(--surface);
+  --color-surface-elevated: var(--surface-elevated);
+  --color-surface-hover: var(--surface-hover);
+
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+
+  --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-muted: var(--primary-muted);
+
+  --color-muted: var(--muted);
+  --color-muted-light: var(--muted-light);
+
+  --color-success: var(--success);
+  --color-danger: var(--danger);
+  --color-warning: var(--warning);
+  --color-info: var(--info);
+
+  --font-sans: var(--font-body);
+  --font-heading: var(--font-heading);
+  --font-mono: var(--font-code);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+/* =========================================
+   BASE STYLES
+========================================= */
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
 }
 
 body {
+  margin: 0;
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+
+  font-family:
+    var(--font-body),
+    Arial,
+    sans-serif;
+
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family:
+    var(--font-heading),
+    Arial,
+    sans-serif;
+
+  letter-spacing: -0.035em;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+::selection {
+  background: rgba(245, 198, 108, 0.28);
+  color: #ffffff;
+}
+
+/* =========================================
+   SCROLLBAR
+========================================= */
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #0b0f14;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #34404c;
+  border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #52606d;
+}
+
+/* =========================================
+   REUSABLE UI CLASSES
+========================================= */
+
+@layer components {
+  .fc-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-card);
+  }
+
+  .fc-card-elevated {
+    background: var(--surface-elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-card);
+  }
+
+  .fc-heading {
+    font-family: var(--font-heading);
+    font-weight: 700;
+    letter-spacing: -0.04em;
+  }
+
+  .fc-muted {
+    color: var(--muted);
+  }
+
+  .fc-btn-primary {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+
+    padding: 11px 20px;
+
+    background: var(--primary);
+    color: #11161c;
+
+    border: 1px solid transparent;
+    border-radius: var(--radius-button);
+
+    font-size: 13px;
+    font-weight: 800;
+
+    transition:
+      background 180ms ease,
+      transform 180ms ease;
+  }
+
+  .fc-btn-primary:hover {
+    background: var(--primary-hover);
+    transform: translateY(-1px);
+  }
+
+  .fc-btn-secondary {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+
+    padding: 11px 20px;
+
+    background: var(--surface);
+    color: var(--foreground);
+
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-button);
+
+    font-size: 13px;
+    font-weight: 700;
+
+    transition:
+      background 180ms ease,
+      border-color 180ms ease;
+  }
+
+  .fc-btn-secondary:hover {
+    background: var(--surface-hover);
+    border-color: var(--primary);
+  }
+
+  .fc-input {
+    width: 100%;
+    padding: 11px 14px;
+
+    background: #101820;
+    color: var(--foreground);
+
+    border: 1px solid var(--border);
+    border-radius: 10px;
+
+    outline: none;
+
+    transition:
+      border-color 180ms ease,
+      box-shadow 180ms ease;
+  }
+
+  .fc-input:focus {
+    border-color: var(--primary);
+
+    box-shadow:
+      0 0 0 3px rgba(245, 198, 108, 0.1);
+  }
+
+  .fc-input::placeholder {
+    color: #697785;
+  }
+
+  .fc-divider {
+    border-color: var(--border);
+  }
+}
+
+/* =========================================
+   ADMIN VISUAL FOUNDATION
+========================================= */
+
+.admin-shell {
+  min-height: 100vh;
+
+  background:
+    radial-gradient(
+      ellipse at 90% 0%,
+      rgba(245, 198, 108, 0.035),
+      transparent 35%
+    ),
+    #0b0f14;
+}
+
+.admin-surface {
+  background: #141b23;
+  border: 1px solid #293440;
+  border-radius: 12px;
+}
+
+.admin-page-title {
+  font-family: var(--font-heading);
+  font-size: clamp(24px, 3vw, 32px);
+  font-weight: 700;
+  letter-spacing: -0.045em;
 }

@@ -1,29 +1,34 @@
-
 "use client";
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
+import {
+  ArrowUpRight,
+  CircleDot,
+  LayoutDashboard,
+  Menu,
+  Radio,
+  Trophy,
+  X,
+} from "lucide-react";
 
 const navigation = [
   { label: "Home", href: "/" },
-  { label: "Events", href: "/events" },
-  { label: "Live Scoreboard", href: "/live" },
+  { label: "Tournaments", href: "/events" },
+  { label: "Fixtures", href: "/matches" },
+  { label: "Live Scores", href: "/live" },
+  { label: "Players", href: "/players" },
 ];
 
 export default function PublicNavbar() {
   const pathname = usePathname();
   const [menuOpen, setMenuOpen] = useState(false);
 
-  // Admin pages have their own interface.
-  if (pathname?.startsWith("/admin")) {
-    return null;
-  }
+  if (pathname?.startsWith("/admin")) return null;
 
   function isActive(href: string) {
-    if (href === "/") {
-      return pathname === "/";
-    }
+    if (href === "/") return pathname === "/";
 
     return (
       pathname === href ||
@@ -32,96 +37,127 @@ export default function PublicNavbar() {
   }
 
   return (
-    <header className="sticky top-0 z-50 border-b border-slate-800 bg-slate-950/95 backdrop-blur">
-      <div className="mx-auto flex h-18 max-w-7xl items-center justify-between gap-5 px-5 py-4 sm:px-8">
-        {/* Brand */}
+    <header className="sticky top-0 z-50 border-b border-white/[0.07] bg-[#0B0F14]/95 backdrop-blur-xl">
+      <div className="mx-auto flex h-[78px] max-w-[1440px] items-center justify-between gap-6 px-5 md:px-8 xl:px-12">
 
+        {/* Brand */}
         <Link
           href="/"
           onClick={() => setMenuOpen(false)}
-          className="flex items-center gap-3"
+          className="group flex shrink-0 items-center gap-3"
         >
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-600 text-xl shadow-lg shadow-blue-950/30">
-            ⚽
+          <div className="relative flex h-11 w-11 items-center justify-center rounded-xl border border-[#F5C66C]/30 bg-[#F5C66C]/10 text-[#F5C66C] transition group-hover:border-[#F5C66C]">
+            <Trophy size={23} strokeWidth={1.7} />
           </div>
 
-          <div>
-            <p className="text-sm font-extrabold tracking-tight text-white sm:text-base">
-              Football Tournament
-            </p>
+          <div className="flex flex-col">
+            <span className="font-heading text-[19px] font-bold leading-tight tracking-[-0.055em] text-white">
+              FOOTBALL<span className="text-[#F5C66C]">CUP.</span>
+            </span>
 
-            <p className="text-[10px] font-medium uppercase tracking-[0.15em] text-slate-500">
-              Management System
-            </p>
+            <span className="mt-0.5 text-[9px] font-bold uppercase tracking-[0.24em] text-[#83909F]">
+              Tournament Platform
+            </span>
           </div>
         </Link>
 
-        {/* Desktop Navigation */}
+        {/* Desktop navigation */}
+        <nav className="hidden h-full items-center gap-1 lg:flex">
+          {navigation.map((item) => {
+            const active = isActive(item.href);
 
-        <nav className="hidden items-center gap-2 md:flex">
-          {navigation.map((item) => (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={`rounded-xl px-4 py-2.5 text-sm font-semibold transition ${
-                isActive(item.href)
-                  ? "bg-blue-600/15 text-blue-400"
-                  : "text-slate-400 hover:bg-slate-900 hover:text-white"
-              }`}
-            >
-              {item.label}
-            </Link>
-          ))}
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                className={`relative flex h-full items-center px-4 text-[13px] font-semibold transition-colors ${
+                  active
+                    ? "text-[#F5C66C]"
+                    : "text-[#9AA6B2] hover:text-white"
+                }`}
+              >
+                {item.label}
 
-          <div className="mx-2 h-6 w-px bg-slate-800" />
+                {active && (
+                  <span className="absolute inset-x-4 bottom-0 h-[2px] rounded-full bg-[#F5C66C]" />
+                )}
+              </Link>
+            );
+          })}
+        </nav>
+
+        {/* Desktop actions */}
+        <div className="hidden items-center gap-3 lg:flex">
+          <Link
+            href="/live"
+            className="inline-flex items-center gap-2 rounded-lg border border-[#F5C66C]/20 bg-[#F5C66C]/[0.06] px-3.5 py-2.5 text-xs font-bold text-[#F5C66C] transition hover:bg-[#F5C66C]/10"
+          >
+            <Radio size={15} />
+            LIVE CENTRE
+          </Link>
 
           <Link
             href="/admin"
-            className="rounded-xl border border-slate-700 bg-slate-900 px-4 py-2.5 text-sm font-semibold text-slate-200 transition hover:border-blue-500 hover:text-white"
+            className="inline-flex items-center gap-2 rounded-lg border border-[#34404B] bg-[#1B232C] px-4 py-2.5 text-xs font-semibold text-[#DCE2E8] transition hover:border-[#F5C66C]/50 hover:text-white"
           >
-            Admin Panel →
+            <LayoutDashboard size={15} />
+            Admin Portal
+            <ArrowUpRight size={14} />
           </Link>
-        </nav>
+        </div>
 
-        {/* Mobile Menu Button */}
-
+        {/* Mobile toggle */}
         <button
           type="button"
-          onClick={() => setMenuOpen((current) => !current)}
-          aria-label="Toggle navigation"
+          aria-label={menuOpen ? "Close navigation" : "Open navigation"}
           aria-expanded={menuOpen}
-          className="rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-xl text-white md:hidden"
+          aria-controls="public-mobile-navigation"
+          onClick={() => setMenuOpen((value) => !value)}
+          className="flex h-10 w-10 items-center justify-center rounded-lg border border-[#34404B] bg-[#19212A] text-white lg:hidden"
         >
-          {menuOpen ? "✕" : "☰"}
+          {menuOpen ? <X size={20} /> : <Menu size={20} />}
         </button>
       </div>
 
-      {/* Mobile Navigation */}
-
+      {/* Mobile navigation */}
       {menuOpen && (
-        <nav className="border-t border-slate-800 bg-slate-950 px-5 py-4 md:hidden">
-          <div className="mx-auto flex max-w-7xl flex-col gap-2">
+        <nav
+          id="public-mobile-navigation"
+          className="border-t border-white/[0.07] bg-[#10161D] px-5 py-5 lg:hidden"
+        >
+          <div className="mx-auto flex max-w-[1440px] flex-col gap-1">
             {navigation.map((item) => (
               <Link
                 key={item.href}
                 href={item.href}
                 onClick={() => setMenuOpen(false)}
-                className={`rounded-xl px-4 py-3 text-sm font-semibold transition ${
+                className={`flex items-center justify-between rounded-lg px-4 py-3.5 text-sm font-semibold transition ${
                   isActive(item.href)
-                    ? "bg-blue-600/15 text-blue-400"
-                    : "text-slate-300 hover:bg-slate-900"
+                    ? "bg-[#F5C66C]/10 text-[#F5C66C]"
+                    : "text-[#AAB5BF] hover:bg-white/5 hover:text-white"
                 }`}
               >
                 {item.label}
+
+                {isActive(item.href) && (
+                  <CircleDot size={14} />
+                )}
               </Link>
             ))}
+
+            <div className="my-3 border-t border-white/[0.07]" />
 
             <Link
               href="/admin"
               onClick={() => setMenuOpen(false)}
-              className="mt-2 rounded-xl border border-slate-700 bg-slate-900 px-4 py-3 text-sm font-semibold text-white"
+              className="flex items-center justify-between rounded-lg border border-[#34404B] bg-[#1B232C] px-4 py-3.5 text-sm font-semibold text-white"
             >
-              Admin Panel →
+              <span className="flex items-center gap-2">
+                <LayoutDashboard size={17} />
+                Admin Portal
+              </span>
+
+              <ArrowUpRight size={16} />
             </Link>
           </div>
         </nav>

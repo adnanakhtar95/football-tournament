@@ -1,150 +1,93 @@
-
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
+import {
+  ArrowLeft, ArrowRight, CalendarDays, Clock3, Flag, MapPin,
+  Radio, Trophy, Wifi, WifiOff, Zap,
+} from "lucide-react";
 
-const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
+const WS_BASE_URL = API_BASE_URL.replace(/^http/, "ws").replace(/\/api\/?$/, "");
 
-const WS_BASE_URL = API_BASE_URL
-  .replace(/^http/, "ws")
-  .replace(/\/api\/?$/, "");
-
-interface Team {
-  id: number;
-  name: string;
-  code: string;
-  logo: string | null;
-}
-
+type MatchStatus = "scheduled" | "live" | "finished";
+interface Team { id: number; name: string; code: string; logo: string | null; }
 interface Match {
-  id: number;
-  home_team: Team;
-  away_team: Team;
-  scheduled_at: string;
-  venue: string;
-  status: "scheduled" | "live" | "finished";
-  started_at: string | null;
-  ended_at: string | null;
-  home_score: number;
-  away_score: number;
+  id: number; home_team: Team; away_team: Team; scheduled_at: string;
+  venue: string; status: MatchStatus; started_at: string | null;
+  ended_at: string | null; home_score: number; away_score: number;
 }
-
 interface MatchEvent {
-  id: number;
-  team: number | Team;
-  type: string;
-  player_name: string;
-  minute: number;
-  points: number;
-  note: string;
-  created_at: string;
+  id: number; team: number | Team; type: string; player_name: string;
+  minute: number; points: number; note: string; created_at: string;
 }
-
 interface SocketMatchEvent {
-  id: number;
-  team_id: number;
-  type: string;
-  player_name: string;
-  minute: number;
-  points: number;
-  note: string;
+  id: number; team_id: number; type: string; player_name: string;
+  minute: number; points: number; note: string;
 }
-
 interface SocketUpdate {
-  type: string;
-  event?: string;
-  match_id?: number;
-  status?: Match["status"];
-  home_score?: number;
-  away_score?: number;
-  started_at?: string | null;
-  ended_at?: string | null;
-  match_event?: SocketMatchEvent;
+  type: string; event?: string; match_id?: number; status?: MatchStatus;
+  home_score?: number; away_score?: number; started_at?: string | null;
+  ended_at?: string | null; match_event?: SocketMatchEvent;
 }
 
-function eventLabel(type: string): string {
-  switch (type) {
-    case "goal":
-      return "Goal";
-    case "yellow_card":
-      return "Yellow Card";
-    case "red_card":
-      return "Red Card";
-    case "penalty_kick":
-      return "Penalty Kick";
-    case "reward":
-      return "Reward";
-    default:
-      return type;
-  }
+function eventLabel(type: string) {
+  const labels: Record<string, string> = {
+    goal: "GOAL!", yellow_card: "Yellow card", red_card: "Red card",
+    penalty_kick: "Penalty kick", reward: "Reward points",
+  };
+  return labels[type] || type.replaceAll("_", " ");
 }
-
-function eventSymbol(type: string): string {
-  switch (type) {
-    case "goal":
-      return "⚽";
-    case "yellow_card":
-      return "🟨";
-    case "red_card":
-      return "🟥";
-    case "penalty_kick":
-      return "🎯";
-    case "reward":
-      return "🏆";
-    default:
-      return "•";
-  }
+function eventSymbol(type: string) {
+  const symbols: Record<string, string> = {
+    goal: "⚽", yellow_card: "🟨", red_card: "🟥",
+    penalty_kick: "◎", reward: "★",
+  };
+  return symbols[type] || "•";
 }
-
-function formatDate(value: string | null): string {
-  if (!value) {
-    return "Not available";
-  }
-
+function formatDate(value: string | null) {
+  if (!value) return "Not available";
   const date = new Date(value);
-
-  if (Number.isNaN(date.getTime())) {
-    return "Not available";
-  }
-
-  return date.toLocaleString();
+  if (Number.isNaN(date.getTime())) return "Not available";
+  return date.toLocaleString("en-US", {
+    month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit",
+  });
 }
-
 function normalizeEvents(data: unknown): MatchEvent[] {
-  if (Array.isArray(data)) {
-    return data as MatchEvent[];
-  }
-
-  if (
-    data !== null &&
-    typeof data === "object" &&
-    "results" in data &&
-    Array.isArray(data.results)
-  ) {
+  if (Array.isArray(data)) return data as MatchEvent[];
+  if (data !== null && typeof data === "object" && "results" in data && Array.isArray(data.results)) {
     return data.results as MatchEvent[];
   }
-
   return [];
 }
-
-function sortEvents(items: MatchEvent[]): MatchEvent[] {
-  return [...items].sort(
-    (a, b) => a.minute - b.minute || a.id - b.id
+function sortEvents(items: MatchEvent[]) {
+  return [...items].sort((a, b) => a.minute - b.minute || a.id - b.id);
+}
+function teamIdOf(event: MatchEvent) {
+  return typeof event.team === "object" && event.team !== null ? event.team.id : event.team;
+}
+function Crest({ team, big = false }: { team: Team; big?: boolean }) {
+  return (
+    <div className={`flex shrink-0 items-center justify-center overflow-hidden border border-[#F5C66C]/30 bg-[linear-gradient(145deg,#3A3531,#17202B)] font-heading font-extrabold text-[#F5C66C] shadow-[0_0_35px_rgba(245,198,108,.07)] ${big ? "h-20 w-20 rounded-2xl text-xl sm:h-28 sm:w-28 sm:text-2xl" : "h-10 w-10 rounded-xl text-xs"}`}>
+      {team.logo ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={team.logo} alt={`${team.name} logo`} className="h-full w-full object-contain p-2" />
+      ) : team.code.slice(0, 3).toUpperCase()}
+    </div>
   );
+}
+function Status({ status }: { status: MatchStatus }) {
+  return <span className={`inline-flex items-center gap-2 rounded-md border px-3 py-1.5 text-[10px] font-extrabold uppercase tracking-[.16em] ${status === "live" ? "border-[#EF6672]/40 bg-[#EF6672]/15 text-[#FF8E97]" : status === "finished" ? "border-white/20 bg-white/10 text-[#D4DCE3]" : "border-[#F5C66C]/35 bg-[#F5C66C]/10 text-[#F5C66C]"}`}>
+    {status === "live" && <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#EF6672]" />}
+    {status === "live" ? "Live Match" : status === "finished" ? "Full Time" : "Upcoming Fixture"}
+  </span>;
 }
 
 export default function MatchPage() {
   const params = useParams();
-
-  const rawId = Array.isArray(params.id)
-    ? params.id[0]
-    : params.id;
-
+  const rawId = Array.isArray(params.id) ? params.id[0] : params.id;
   const matchId = Number(rawId);
-
   const [match, setMatch] = useState<Match | null>(null);
   const [events, setEvents] = useState<MatchEvent[]>([]);
   const [loading, setLoading] = useState(true);
@@ -154,659 +97,194 @@ export default function MatchPage() {
   useEffect(() => {
     let cancelled = false;
     let socket: WebSocket | null = null;
-
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let refreshTimer: ReturnType<typeof setTimeout> | null = null;
-
-    // Prevent an older API response from overwriting a newer one.
     let refreshSequence = 0;
 
     if (!Number.isInteger(matchId) || matchId <= 0) {
-      setError("Invalid match ID.");
-      setLoading(false);
-      return;
+      setError("Invalid match ID."); setLoading(false); return;
     }
 
     const matchUrl = `${API_BASE_URL}/matches/${matchId}/`;
     const eventsUrl = `${API_BASE_URL}/matches/${matchId}/events/`;
     const socketUrl = `${WS_BASE_URL}/ws/matches/${matchId}/`;
 
-    /*
-     * Fetch the latest match details and timeline.
-     * This ensures started_at and ended_at update
-     * even when the WebSocket payload only contains scores.
-     */
     async function refreshMatch(showLoader = false) {
       const sequence = ++refreshSequence;
-
       try {
-        if (showLoader) {
-          setLoading(true);
-          setError("");
-        }
-
+        if (showLoader) { setLoading(true); setError(""); }
         const [matchResponse, eventsResponse] = await Promise.all([
-          fetch(matchUrl, {
-            cache: "no-store",
-          }),
-          fetch(eventsUrl, {
-            cache: "no-store",
-          }),
+          fetch(matchUrl, { cache: "no-store" }),
+          fetch(eventsUrl, { cache: "no-store" }),
         ]);
-
-        if (!matchResponse.ok) {
-          throw new Error(
-            `Unable to load match (HTTP ${matchResponse.status}).`
-          );
-        }
-
-        if (!eventsResponse.ok) {
-          throw new Error(
-            `Unable to load match events (HTTP ${eventsResponse.status}).`
-          );
-        }
-
+        if (!matchResponse.ok) throw new Error(`Unable to load match (HTTP ${matchResponse.status}).`);
+        if (!eventsResponse.ok) throw new Error(`Unable to load match events (HTTP ${eventsResponse.status}).`);
         const updatedMatch: Match = await matchResponse.json();
         const eventsData: unknown = await eventsResponse.json();
-
-        if (cancelled || sequence !== refreshSequence) {
-          return;
-        }
-
+        if (cancelled || sequence !== refreshSequence) return;
         setMatch(updatedMatch);
-
         const latestEvents = normalizeEvents(eventsData);
-
-        setEvents((current) => {
+        setEvents(current => {
           const merged = new Map<number, MatchEvent>();
-
-          latestEvents.forEach((item) => {
-            merged.set(item.id, item);
-          });
-
-          // Preserve any realtime event received while
-          // the API request was still in progress.
-          current.forEach((item) => {
-            if (!merged.has(item.id)) {
-              merged.set(item.id, item);
-            }
-          });
-
+          latestEvents.forEach(item => merged.set(item.id, item));
+          current.forEach(item => { if (!merged.has(item.id)) merged.set(item.id, item); });
           return sortEvents(Array.from(merged.values()));
         });
-
         setError("");
       } catch (err) {
-        if (cancelled || sequence !== refreshSequence) {
-          return;
-        }
-
+        if (cancelled || sequence !== refreshSequence) return;
         console.error("Match synchronization failed:", err);
-
-        setError(
-          err instanceof Error
-            ? err.message
-            : "Unable to load match."
-        );
+        setError(err instanceof Error ? err.message : "Unable to load match.");
       } finally {
-        if (!cancelled && sequence === refreshSequence && showLoader) {
-          setLoading(false);
-        }
+        if (!cancelled && sequence === refreshSequence && showLoader) setLoading(false);
       }
     }
-
-    /*
-     * Debounce refresh requests.
-     * Multiple WebSocket events arriving close together
-     * will trigger one fresh API synchronization.
-     */
     function scheduleRefresh() {
-      if (refreshTimer) {
-        clearTimeout(refreshTimer);
-      }
-
+      if (refreshTimer) clearTimeout(refreshTimer);
       refreshTimer = setTimeout(() => {
         refreshTimer = null;
-
-        if (!cancelled) {
-          void refreshMatch();
-        }
+        if (!cancelled) void refreshMatch();
       }, 200);
     }
-
-    /*
-     * WebSocket connection.
-     */
     function connectSocket() {
-      if (cancelled) {
-        return;
-      }
-
+      if (cancelled) return;
       const currentSocket = new WebSocket(socketUrl);
       socket = currentSocket;
-
-      /*
-       * React Strict Mode may unmount the component
-       * while the WebSocket is still CONNECTING.
-       *
-       * Instead of closing a CONNECTING socket immediately,
-       * close it after its connection opens.
-       */
       currentSocket.addEventListener("open", () => {
-        if (cancelled) {
-          currentSocket.close(1000, "Component unmounted");
-        }
+        if (cancelled) currentSocket.close(1000, "Component unmounted");
       });
-
       currentSocket.onopen = () => {
-        if (cancelled) {
-          return;
-        }
-
+        if (cancelled) return;
         setSocketConnected(true);
-
-        // Recover updates missed during initial loading
-        // or while the connection was disconnected.
         scheduleRefresh();
       };
-
       currentSocket.onmessage = (message: MessageEvent) => {
-        if (cancelled) {
-          return;
-        }
-
+        if (cancelled) return;
         try {
           const data: SocketUpdate = JSON.parse(message.data);
-
-          if (data.type === "connection") {
-            return;
-          }
-
-          if (
-            data.match_id !== undefined &&
-            Number(data.match_id) !== matchId
-          ) {
-            return;
-          }
-
-          /*
-           * Immediately update the visible scoreboard.
-           */
-          setMatch((current) => {
-            if (!current) {
-              return current;
-            }
-
-            return {
-              ...current,
-
-              status: data.status ?? current.status,
-
-              home_score:
-                data.home_score ?? current.home_score,
-
-              away_score:
-                data.away_score ?? current.away_score,
-
-              started_at:
-                data.started_at !== undefined
-                  ? data.started_at
-                  : current.started_at,
-
-              ended_at:
-                data.ended_at !== undefined
-                  ? data.ended_at
-                  : current.ended_at,
-            };
-          });
-
-          /*
-           * Immediately append a new timeline event.
-           * Duplicate IDs are ignored.
-           */
+          if (data.type === "connection") return;
+          if (data.match_id !== undefined && Number(data.match_id) !== matchId) return;
+          setMatch(current => current ? ({
+            ...current, status: data.status ?? current.status,
+            home_score: data.home_score ?? current.home_score,
+            away_score: data.away_score ?? current.away_score,
+            started_at: data.started_at !== undefined ? data.started_at : current.started_at,
+            ended_at: data.ended_at !== undefined ? data.ended_at : current.ended_at,
+          }) : current);
           if (data.match_event) {
             const incoming = data.match_event;
-
             const newEvent: MatchEvent = {
-              id: incoming.id,
-              team: incoming.team_id,
-              type: incoming.type,
-              player_name: incoming.player_name,
-              minute: incoming.minute,
-              points: incoming.points,
-              note: incoming.note,
-              created_at: new Date().toISOString(),
+              id: incoming.id, team: incoming.team_id, type: incoming.type,
+              player_name: incoming.player_name, minute: incoming.minute,
+              points: incoming.points, note: incoming.note, created_at: new Date().toISOString(),
             };
-
-            setEvents((current) => {
-              if (
-                current.some((item) => item.id === newEvent.id)
-              ) {
-                return current;
-              }
-
-              return sortEvents([...current, newEvent]);
-            });
+            setEvents(current => current.some(item => item.id === newEvent.id) ? current : sortEvents([...current, newEvent]));
           }
-
-          /*
-           * IMPORTANT FIX:
-           *
-           * Fetch the complete match after each update.
-           * This synchronizes:
-           *
-           * - started_at
-           * - ended_at
-           * - status
-           * - scores
-           * - event timeline
-           *
-           * No browser reload is required.
-           */
           scheduleRefresh();
-        } catch (err) {
-          console.error("Invalid WebSocket message:", err);
-        }
+        } catch (err) { console.error("Invalid WebSocket message:", err); }
       };
-
-      currentSocket.onerror = () => {
-        if (!cancelled) {
-          setSocketConnected(false);
-        }
-      };
-
+      currentSocket.onerror = () => { if (!cancelled) setSocketConnected(false); };
       currentSocket.onclose = () => {
-        if (cancelled) {
-          return;
-        }
-
+        if (cancelled) return;
         setSocketConnected(false);
-
-        if (reconnectTimer) {
-          clearTimeout(reconnectTimer);
-        }
-
+        if (reconnectTimer) clearTimeout(reconnectTimer);
         reconnectTimer = setTimeout(() => {
           reconnectTimer = null;
-
-          if (!cancelled) {
-            connectSocket();
-          }
+          if (!cancelled) connectSocket();
         }, 3000);
       };
     }
-
-    /*
-     * Initial page load.
-     */
     async function initialize() {
       await refreshMatch(true);
-
-      if (!cancelled) {
-        connectSocket();
-      }
+      if (!cancelled) connectSocket();
     }
-
     void initialize();
-
-    /*
-     * Cleanup.
-     */
     return () => {
       cancelled = true;
-
       refreshSequence += 1;
-
-      if (refreshTimer) {
-        clearTimeout(refreshTimer);
-        refreshTimer = null;
-      }
-
-      if (reconnectTimer) {
-        clearTimeout(reconnectTimer);
-        reconnectTimer = null;
-      }
-
-      const currentSocket = socket;
-
-      if (currentSocket) {
+      if (refreshTimer) clearTimeout(refreshTimer);
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (socket) {
+        const currentSocket = socket as WebSocket;
         currentSocket.onopen = null;
         currentSocket.onmessage = null;
         currentSocket.onerror = null;
         currentSocket.onclose = null;
-
-        if (currentSocket.readyState === WebSocket.OPEN) {
-          currentSocket.close(1000, "Component unmounted");
-        }
-
-        // A CONNECTING socket is handled by its open listener.
+        if (currentSocket.readyState === WebSocket.OPEN) currentSocket.close(1000, "Component unmounted");
       }
     };
   }, [matchId]);
 
-  /*
-   * Loading state.
-   */
-  if (loading) {
-    return (
-      <main className="min-h-screen bg-slate-950 text-white">
-        <div className="mx-auto max-w-6xl px-6 py-12">
-          <div className="flex items-center gap-3 text-slate-400">
-            <div className="h-6 w-6 animate-spin rounded-full border-2 border-slate-700 border-t-blue-500" />
-            Loading match...
-          </div>
+  const eventSummary = useMemo(() => ({
+    goals: events.filter(e => e.type === "goal").length,
+    cards: events.filter(e => e.type === "yellow_card" || e.type === "red_card").length,
+    penalties: events.filter(e => e.type === "penalty_kick").length,
+  }), [events]);
+
+  if (loading) return <main className="flex min-h-[75vh] items-center justify-center bg-[#090E13] px-5 text-white"><div className="text-center"><Radio className="mx-auto animate-pulse text-[#F5C66C]" size={40} /><p className="mt-5 font-heading text-xl font-bold">Tuning into Match Centre...</p><p className="mt-2 text-sm text-[#91A0AC]">Preparing the live broadcast</p></div></main>;
+  if (!match) return <main className="flex min-h-[75vh] items-center justify-center bg-[#090E13] px-5 text-white"><div className="text-center"><Trophy className="mx-auto text-[#F5C66C]" size={42} /><h1 className="mt-5 font-heading text-3xl font-bold">Match not found</h1><p className="mt-3 text-sm text-[#AAB5C0]">{error || "Unable to load this match."}</p><Link href="/matches" className="mt-7 inline-flex items-center gap-2 rounded-lg bg-[#F5C66C] px-5 py-3 text-xs font-extrabold text-[#11161C]"><ArrowLeft size={15} /> All Matches</Link></div></main>;
+
+  const home = match.home_team;
+  const away = match.away_team;
+  const played = match.status !== "scheduled";
+
+  return <main className="min-h-screen bg-[#090E13] text-white">
+    {/* IMMERSIVE MATCH BROADCAST */}
+    <section className="relative isolate overflow-hidden border-b border-white/10">
+      <div className="absolute inset-0 bg-cover bg-center opacity-35" style={{ backgroundImage: "url('https://images.unsplash.com/photo-1522778119026-d647f0596c20?auto=format&fit=crop&w=2000&q=85')" }} />
+      <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(9,14,19,.68)_0%,rgba(9,14,19,.78)_42%,#090E13_100%)]" />
+      <div className="pointer-events-none absolute inset-x-0 top-1/2 mx-auto h-[400px] max-w-[850px] -translate-y-1/2 rounded-full bg-[#F5C66C]/[.045] blur-[100px]" />
+      <div className="relative mx-auto max-w-[1440px] px-5 pb-12 pt-7 md:px-8 xl:px-12">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-center gap-5"><Link href="/matches" className="inline-flex items-center gap-2 text-xs font-semibold text-[#B6C1CA] transition hover:text-[#F5C66C]"><ArrowLeft size={15} /> All Matches</Link><span className="hidden h-4 w-px bg-white/20 sm:block" /><Link href="/live" className="hidden items-center gap-2 text-xs text-[#A3B0BC] hover:text-[#F5C66C] sm:inline-flex"><Radio size={14} /> Live Scoreboard</Link></div>
+          <span className={`inline-flex items-center gap-2 text-[10px] font-bold tracking-[.1em] ${socketConnected ? "text-[#F5C66C]" : "text-[#A2AFBB]"}`}>{socketConnected ? <Wifi size={13} /> : <WifiOff size={13} />}{socketConnected ? "REALTIME CONNECTED" : "RECONNECTING FEED"}</span>
         </div>
-      </main>
-    );
-  }
-
-  /*
-   * Match not found.
-   */
-  if (!match) {
-    return (
-      <main className="min-h-screen bg-slate-950 text-white">
-        <div className="mx-auto max-w-6xl px-6 py-12">
-          <Link
-            href="/live"
-            className="text-sm text-blue-400 hover:text-blue-300"
-          >
-            ← Back to Live Scoreboard
-          </Link>
-
-          <div className="mt-8 rounded-3xl border border-red-900 bg-slate-900 p-8">
-            <h1 className="text-2xl font-bold">
-              Match Not Found
-            </h1>
-
-            <p className="mt-3 text-red-300">
-              {error || "Unable to load this match."}
-            </p>
+        <div className="mt-12 flex flex-col items-center text-center sm:mt-16">
+          <p className="flex items-center gap-3 text-[10px] font-extrabold uppercase tracking-[.24em] text-[#F5C66C]"><span className="h-px w-7 bg-[#F5C66C]/65" /> FOOTBALLCUP / MATCH {String(match.id).padStart(3, "0")} <span className="h-px w-7 bg-[#F5C66C]/65" /></p>
+          <div className="mt-5"><Status status={match.status} /></div>
+          <div className="mt-9 grid w-full max-w-[1000px] grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 sm:gap-8">
+            <div className="flex min-w-0 flex-col items-center"><Crest team={home} big /><span className="mt-5 text-[10px] font-bold uppercase tracking-[.2em] text-[#B79C70]">Home Side</span><h1 className="mt-2 max-w-[290px] break-words font-heading text-lg font-extrabold leading-tight tracking-[-.04em] sm:text-3xl">{home.name}</h1><span className="mt-2 font-mono text-xs text-[#8796A4]">{home.code}</span></div>
+            <div className="min-w-[92px] px-1 text-center sm:min-w-[240px]"><div className="font-mono text-[clamp(38px,7vw,104px)] font-extrabold leading-none tracking-[-.105em] drop-shadow-[0_0_35px_rgba(245,198,108,.14)]">{played ? match.home_score : "–"}<span className="mx-2 text-[#A98E60] sm:mx-4">:</span>{played ? match.away_score : "–"}</div><p className={`mt-5 text-[10px] font-extrabold uppercase tracking-[.23em] ${match.status === "live" ? "text-[#FF8E97]" : "text-[#E3C18A]"}`}>{match.status === "live" ? "● IN PLAY" : match.status === "finished" ? "FULL TIME" : "VS"}</p></div>
+            <div className="flex min-w-0 flex-col items-center"><Crest team={away} big /><span className="mt-5 text-[10px] font-bold uppercase tracking-[.2em] text-[#B79C70]">Away Side</span><h2 className="mt-2 max-w-[290px] break-words font-heading text-lg font-extrabold leading-tight tracking-[-.04em] sm:text-3xl">{away.name}</h2><span className="mt-2 font-mono text-xs text-[#8796A4]">{away.code}</span></div>
           </div>
+          <div className="mt-10 flex flex-wrap items-center justify-center gap-x-7 gap-y-3 text-xs text-[#BAC5CE]"><span className="inline-flex items-center gap-2"><CalendarDays size={14} className="text-[#F5C66C]" /> {formatDate(match.scheduled_at)}</span><span className="inline-flex items-center gap-2"><MapPin size={14} className="text-[#F5C66C]" /> {match.venue || "Venue TBA"}</span></div>
         </div>
-      </main>
-    );
-  }
-
-  const homeTeam = match.home_team;
-  const awayTeam = match.away_team;
-
-  return (
-    <main className="min-h-screen bg-slate-950 text-white">
-      <div className="mx-auto max-w-6xl px-5 py-10 sm:px-8">
-        {/* Navigation */}
-
-        <div className="mb-8 flex flex-wrap items-center gap-5">
-          <Link
-            href="/live"
-            className="text-sm font-medium text-blue-400 hover:text-blue-300"
-          >
-            ← Live Scoreboard
-          </Link>
-
-          <Link
-            href="/events"
-            className="text-sm text-slate-400 hover:text-white"
-          >
-            Browse Events
-          </Link>
-        </div>
-
-        {error && (
-          <div className="mb-6 rounded-2xl border border-red-900 bg-red-950/30 p-4 text-red-300">
-            {error}
-          </div>
-        )}
-
-        {/* Match Header */}
-
-        <section className="overflow-hidden rounded-3xl border border-slate-800 bg-slate-900">
-          <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-800 px-6 py-5 sm:px-8">
-            <div>
-              <p className="text-xs font-bold uppercase tracking-[0.2em] text-blue-400">
-                Football Tournament
-              </p>
-
-              <h1 className="mt-2 text-2xl font-bold sm:text-3xl">
-                Match #{match.id}
-              </h1>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-3">
-              <span
-                className={`rounded-full px-3 py-2 text-xs font-semibold ${
-                  socketConnected
-                    ? "bg-green-950 text-green-400"
-                    : "bg-slate-800 text-slate-400"
-                }`}
-              >
-                {socketConnected
-                  ? "● Realtime Connected"
-                  : "○ Realtime Disconnected"}
-              </span>
-
-              <span
-                className={`rounded-full px-4 py-2 text-xs font-bold uppercase ${
-                  match.status === "live"
-                    ? "bg-red-950 text-red-400"
-                    : match.status === "finished"
-                      ? "bg-slate-800 text-slate-300"
-                      : "bg-yellow-950 text-yellow-400"
-                }`}
-              >
-                {match.status === "live" && "● "}
-                {match.status}
-              </span>
-            </div>
-          </div>
-
-          {/* Scoreboard */}
-
-          <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3 px-4 py-12 text-center sm:gap-10 sm:px-10">
-            {/* Home Team */}
-
-            <div className="min-w-0">
-              <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl border border-slate-700 bg-slate-800 text-lg font-bold text-blue-400">
-                {homeTeam.code}
-              </div>
-
-              <h2 className="break-words text-base font-semibold sm:text-2xl">
-                {homeTeam.name}
-              </h2>
-
-              <p className="mt-2 text-xs font-medium uppercase tracking-widest text-slate-500">
-                Home
-              </p>
-            </div>
-
-            {/* Score */}
-
-            <div>
-              <p className="whitespace-nowrap text-4xl font-extrabold tracking-tight sm:text-7xl">
-                {match.home_score}
-
-                <span className="mx-2 text-slate-600 sm:mx-5">
-                  :
-                </span>
-
-                {match.away_score}
-              </p>
-
-              <p className="mt-4 text-xs font-semibold uppercase tracking-widest text-slate-500">
-                {match.status === "live"
-                  ? "In Progress"
-                  : match.status === "finished"
-                    ? "Full Time"
-                    : "Not Started"}
-              </p>
-            </div>
-
-            {/* Away Team */}
-
-            <div className="min-w-0">
-              <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl border border-slate-700 bg-slate-800 text-lg font-bold text-blue-400">
-                {awayTeam.code}
-              </div>
-
-              <h2 className="break-words text-base font-semibold sm:text-2xl">
-                {awayTeam.name}
-              </h2>
-
-              <p className="mt-2 text-xs font-medium uppercase tracking-widest text-slate-500">
-                Away
-              </p>
-            </div>
-          </div>
-
-          {/* Match Information */}
-
-          <div className="grid gap-6 border-t border-slate-800 bg-slate-950/30 px-6 py-6 sm:grid-cols-2 sm:px-8 lg:grid-cols-4">
-            <div>
-              <p className="text-xs uppercase tracking-widest text-slate-500">
-                Venue
-              </p>
-
-              <p className="mt-2 text-sm font-medium">
-                {match.venue || "Not specified"}
-              </p>
-            </div>
-
-            <div>
-              <p className="text-xs uppercase tracking-widest text-slate-500">
-                Scheduled
-              </p>
-
-              <p className="mt-2 text-sm font-medium">
-                {formatDate(match.scheduled_at)}
-              </p>
-            </div>
-
-            <div>
-              <p className="text-xs uppercase tracking-widest text-slate-500">
-                Started
-              </p>
-
-              <p className="mt-2 text-sm font-medium">
-                {formatDate(match.started_at)}
-              </p>
-            </div>
-
-            <div>
-              <p className="text-xs uppercase tracking-widest text-slate-500">
-                Finished
-              </p>
-
-              <p className="mt-2 text-sm font-medium">
-                {formatDate(match.ended_at)}
-              </p>
-            </div>
-          </div>
-        </section>
-
-        {/* Event Timeline */}
-
-        <section className="mt-6 rounded-3xl border border-slate-800 bg-slate-900 p-6 sm:p-8">
-          <div className="flex flex-wrap items-center justify-between gap-4">
-            <div>
-              <p className="text-xs font-bold uppercase tracking-[0.2em] text-blue-400">
-                Match Activity
-              </p>
-
-              <h2 className="mt-2 text-2xl font-semibold">
-                Event Timeline
-              </h2>
-
-              <p className="mt-2 text-sm text-slate-500">
-                Goals, cards, penalties and rewards.
-              </p>
-            </div>
-
-            <span className="rounded-full bg-slate-800 px-4 py-2 text-xs font-semibold text-slate-300">
-              {events.length} Events
-            </span>
-          </div>
-
-          {events.length === 0 ? (
-            <div className="mt-7 rounded-2xl border border-dashed border-slate-700 bg-slate-950 p-10 text-center">
-              <p className="text-4xl">⚽</p>
-
-              <h3 className="mt-4 text-lg font-semibold">
-                No Events Recorded
-              </h3>
-
-              <p className="mt-2 text-sm text-slate-500">
-                Match events will appear here as they happen.
-              </p>
-            </div>
-          ) : (
-            <div className="mt-7 space-y-3">
-              {events.map((event) => {
-               const teamId =
-  typeof event.team === "object" && event.team !== null
-    ? event.team.id
-    : event.team;
-
-const team =
-  teamId === homeTeam.id
-    ? homeTeam
-    : teamId === awayTeam.id
-      ? awayTeam
-      : null;
-
-                return (
-                  <article
-                    key={event.id}
-                    className="flex items-start gap-4 rounded-2xl border border-slate-800 bg-slate-950 p-4 transition hover:border-slate-700 sm:p-5"
-                  >
-                    <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-slate-800 text-xl">
-                      {eventSymbol(event.type)}
-                    </div>
-
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-3">
-                        <span className="font-semibold">
-                          {eventLabel(event.type)}
-                        </span>
-
-                        <span className="rounded-lg bg-blue-950 px-2.5 py-1 text-xs font-bold text-blue-400">
-                          {event.minute}&apos;
-                        </span>
-
-                        <span className="text-sm text-slate-400">
-                          {team?.name || `Team #${teamId}`}
-                        </span>
-                      </div>
-
-                      {event.player_name && (
-                        <p className="mt-2 text-sm text-slate-200">
-                          {event.player_name}
-                        </p>
-                      )}
-
-                      {event.note && (
-                        <p className="mt-1 text-sm text-slate-500">
-                          {event.note}
-                        </p>
-                      )}
-
-                      {event.type === "reward" &&
-                        event.points !== 0 && (
-                          <p className="mt-2 text-sm font-semibold text-yellow-400">
-                            +{event.points} Bonus Points
-                          </p>
-                        )}
-                    </div>
-                  </article>
-                );
-              })}
-            </div>
-          )}
-        </section>
-
-        <footer className="mt-10 border-t border-slate-800 pt-6 text-center text-xs text-slate-500">
-          Football Tournament Management System
-        </footer>
       </div>
-    </main>
-  );
+    </section>
+
+    {/* MATCH METADATA STRIP */}
+    <section className="border-b border-white/[.08] bg-[#151D26]"><div className="mx-auto grid max-w-[1440px] grid-cols-2 px-5 sm:grid-cols-4 md:px-8 xl:px-12">{[
+      { icon: Clock3, label: "Kickoff", value: formatDate(match.scheduled_at) },
+      { icon: Radio, label: "Match Started", value: formatDate(match.started_at) },
+      { icon: Flag, label: "Final Whistle", value: formatDate(match.ended_at) },
+      { icon: MapPin, label: "Venue", value: match.venue || "Not specified" },
+    ].map((item, i) => { const Icon = item.icon; return <div key={item.label} className={`flex min-w-0 items-start gap-3 py-5 ${i > 0 ? "sm:border-l sm:border-white/[.08] sm:pl-5" : ""} ${i > 1 ? "border-t border-white/[.08] sm:border-t-0" : ""}`}><Icon size={17} className="mt-0.5 shrink-0 text-[#F5C66C]" /><div className="min-w-0"><p className="text-[9px] font-extrabold uppercase tracking-[.12em] text-[#8393A0]">{item.label}</p><p className="mt-1 break-words text-xs font-bold leading-5 text-[#E1E8ED]">{item.value}</p></div></div>; })}</div></section>
+
+    <div className="mx-auto max-w-[1440px] px-5 py-12 md:px-8 xl:px-12">
+      {error && <div className="mb-8 rounded-lg border border-[#EF6672]/35 bg-[#EF6672]/10 p-4 text-sm text-[#FFB2B9]">{error}</div>}
+      {/* Editorial section heading */}
+      <div className="mb-7 flex flex-wrap items-end justify-between gap-4"><div><p className="text-[10px] font-extrabold uppercase tracking-[.22em] text-[#F5C66C]">The Story Of The Match</p><h2 className="mt-2 font-heading text-3xl font-extrabold tracking-[-.06em] sm:text-4xl">Match Commentary<span className="text-[#F5C66C]">.</span></h2><p className="mt-3 text-sm text-[#91A0AC]">Every goal, decision and defining moment, in chronological order.</p></div><div className="flex items-center gap-2 rounded-md border border-[#35414C] bg-[#151E27] px-3 py-2 font-mono text-[11px] text-[#D0DAE2]"><Zap size={13} className="text-[#F5C66C]" /> {events.length} EVENTS</div></div>
+      {/* Asymmetric 2-column editorial layout */}
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_300px] xl:grid-cols-[minmax(0,1fr)_330px]">
+        <section className="overflow-hidden rounded-xl border border-[#303C47] bg-[#121B24]">
+          <div className="grid grid-cols-[1fr_48px_1fr] items-center border-b border-[#303C47] bg-[linear-gradient(90deg,#302B28,#1A242E_50%,#302B28)] px-4 py-5 sm:grid-cols-[1fr_76px_1fr] sm:px-7"><div className="flex min-w-0 items-center gap-2"><Crest team={home} /><p className="truncate font-heading text-sm font-bold sm:text-base">{home.name}</p></div><div className="text-center font-mono text-[10px] font-bold tracking-[.16em] text-[#A9916C]">MIN</div><div className="flex min-w-0 items-center justify-end gap-2"><p className="truncate text-right font-heading text-sm font-bold sm:text-base">{away.name}</p><Crest team={away} /></div></div>
+          {events.length === 0 ? <div className="flex min-h-[320px] flex-col items-center justify-center px-6 py-14 text-center"><div className="flex h-16 w-16 items-center justify-center rounded-full border border-[#F5C66C]/25 bg-[#F5C66C]/[.07]"><Radio size={27} className="text-[#F5C66C]" /></div><h3 className="mt-5 font-heading text-xl font-bold">Awaiting the first moment</h3><p className="mt-2 max-w-sm text-sm leading-6 text-[#8F9EAB]">Goals, cards, penalties and rewards will appear here as the match unfolds.</p></div> : <div className="relative px-3 py-6 sm:px-7 sm:py-8"><div className="pointer-events-none absolute bottom-7 left-1/2 top-7 w-px -translate-x-1/2 bg-gradient-to-b from-[#F5C66C]/60 via-[#3B4752] to-[#3B4752]" /><div className="space-y-4">{events.map(event => {
+            const teamId = teamIdOf(event);
+            const isHome = teamId === home.id;
+            const team = isHome ? home : teamId === away.id ? away : null;
+            const isGoal = event.type === "goal";
+            return <div key={event.id} className="relative grid grid-cols-[minmax(0,1fr)_48px_minmax(0,1fr)] items-center gap-1 sm:grid-cols-[minmax(0,1fr)_76px_minmax(0,1fr)] sm:gap-3"><div className={isHome ? "flex justify-end" : ""}>{isHome && <div className={`w-full max-w-[340px] border-l-2 p-3 sm:p-4 ${isGoal ? "border-[#F5C66C] bg-[#F5C66C]/[.09]" : "border-[#4B5965] bg-[#202B35]"}`}><div className="flex flex-wrap items-center gap-2"><span className="text-lg">{eventSymbol(event.type)}</span><span className={`text-xs font-extrabold ${isGoal ? "text-[#F5C66C]" : "text-white"}`}>{eventLabel(event.type)}</span></div><p className="mt-1 break-words text-xs font-bold text-[#E3EAF0]">{event.player_name || team?.name || `Team #${teamId}`}</p>{event.player_name && <p className="mt-1 text-[10px] text-[#98A7B3]">{team?.name || `Team #${teamId}`}</p>}{event.note && <p className="mt-2 break-words text-[11px] leading-5 text-[#A9B6C0]">{event.note}</p>}{event.type === "reward" && event.points !== 0 && <p className="mt-2 text-[11px] font-extrabold text-[#F5C66C]">{event.points > 0 ? "+" : ""}{event.points} bonus points</p>}</div>}</div><div className="relative z-10 mx-auto flex h-10 w-10 items-center justify-center rounded-full border border-[#F5C66C]/50 bg-[#242B31] font-mono text-xs font-extrabold text-[#F5C66C] sm:h-12 sm:w-12">{event.minute}&apos;</div><div>{!isHome && <div className={`w-full max-w-[340px] border-r-2 p-3 sm:p-4 ${isGoal ? "border-[#F5C66C] bg-[#F5C66C]/[.09]" : "border-[#4B5965] bg-[#202B35]"}`}><div className="flex flex-wrap items-center gap-2"><span className="text-lg">{eventSymbol(event.type)}</span><span className={`text-xs font-extrabold ${isGoal ? "text-[#F5C66C]" : "text-white"}`}>{eventLabel(event.type)}</span></div><p className="mt-1 break-words text-xs font-bold text-[#E3EAF0]">{event.player_name || team?.name || `Team #${teamId}`}</p>{event.player_name && <p className="mt-1 text-[10px] text-[#98A7B3]">{team?.name || `Team #${teamId}`}</p>}{event.note && <p className="mt-2 break-words text-[11px] leading-5 text-[#A9B6C0]">{event.note}</p>}{event.type === "reward" && event.points !== 0 && <p className="mt-2 text-[11px] font-extrabold text-[#F5C66C]">{event.points > 0 ? "+" : ""}{event.points} bonus points</p>}</div>}</div></div>;
+          })}</div></div>}
+          <div className="flex items-center justify-center gap-2 border-t border-[#303C47] bg-[#17212A] px-5 py-4 text-[10px] font-bold uppercase tracking-[.15em] text-[#8D9CA9]"><Flag size={13} className="text-[#F5C66C]" /> End of recorded commentary</div>
+        </section>
+        {/* Sidebar: compact insight dashboard, deliberately different shape */}
+        <aside className="space-y-5"><div className="overflow-hidden rounded-xl border border-[#F5C66C]/25 bg-[linear-gradient(145deg,#302B27,#151E27_72%)] p-6"><div className="flex items-center gap-2 text-[10px] font-extrabold uppercase tracking-[.2em] text-[#F5C66C]"><Trophy size={16} /> Match Snapshot</div><p className="mt-6 font-heading text-5xl font-extrabold tracking-[-.08em]">{played ? `${match.home_score} : ${match.away_score}` : "VS"}</p><p className="mt-2 text-xs text-[#AAB7C1]">{home.code} <span className="mx-2 text-[#F5C66C]">/</span> {away.code}</p><div className="mt-6 h-px bg-[#F5C66C]/20" /><div className="mt-5 flex items-center justify-between text-xs"><span className="text-[#91A0AC]">Match status</span><span className="font-bold uppercase text-[#F5C66C]">{match.status}</span></div><div className="mt-3 flex items-center justify-between text-xs"><span className="text-[#91A0AC]">Recorded moments</span><span className="font-mono font-bold">{events.length}</span></div></div>
+          <div className="overflow-hidden rounded-xl border border-[#303C47] bg-[#141D26]"><div className="border-b border-[#303C47] px-5 py-4"><p className="text-[10px] font-extrabold uppercase tracking-[.18em] text-[#F5C66C]">By The Numbers</p><h3 className="mt-1 font-heading text-lg font-bold">Match Activity</h3></div><div className="grid grid-cols-3 divide-x divide-[#303C47] py-6 text-center"><div><p className="font-mono text-3xl font-extrabold text-white">{eventSummary.goals}</p><p className="mt-2 text-[10px] uppercase tracking-[.1em] text-[#8D9CA9]">Goals</p></div><div><p className="font-mono text-3xl font-extrabold text-white">{eventSummary.cards}</p><p className="mt-2 text-[10px] uppercase tracking-[.1em] text-[#8D9CA9]">Cards</p></div><div><p className="font-mono text-3xl font-extrabold text-white">{eventSummary.penalties}</p><p className="mt-2 text-[10px] uppercase tracking-[.1em] text-[#8D9CA9]">Penalties</p></div></div></div>
+          <Link href="/matches" className="group flex items-center justify-between rounded-xl border border-[#35424E] bg-[#19232D] p-5 transition hover:border-[#F5C66C]/50"><div><p className="text-[10px] font-extrabold uppercase tracking-[.17em] text-[#F5C66C]">Explore More</p><p className="mt-2 font-heading text-lg font-bold">All Fixtures</p><p className="mt-1 text-xs text-[#91A0AC]">Results and upcoming matches</p></div><ArrowRight size={20} className="text-[#F5C66C] transition group-hover:translate-x-1" /></Link>
+          <Link href="/live" className="group flex items-center justify-between rounded-xl border border-[#35424E] bg-[#19232D] p-5 transition hover:border-[#F5C66C]/50"><div><p className="text-[10px] font-extrabold uppercase tracking-[.17em] text-[#F5C66C]">Never Miss A Goal</p><p className="mt-2 font-heading text-lg font-bold">Live Scoreboard</p><p className="mt-1 text-xs text-[#91A0AC]">Follow every match in play</p></div><Radio size={20} className="text-[#F5C66C]" /></Link>
+        </aside>
+      </div>
+    </div>
+    <section className="relative isolate overflow-hidden border-t border-white/10"><div className="absolute inset-0 bg-cover bg-center opacity-20" style={{ backgroundImage: "url('https://images.unsplash.com/photo-1574629810360-7efbbe195018?auto=format&fit=crop&w=1800&q=85')" }} /><div className="absolute inset-0 bg-gradient-to-r from-[#090E13] via-[#090E13]/90 to-[#090E13]/50" /><div className="relative mx-auto flex max-w-[1440px] flex-col justify-between gap-6 px-5 py-12 md:flex-row md:items-center md:px-8 xl:px-12"><div><p className="text-[10px] font-extrabold uppercase tracking-[.2em] text-[#F5C66C]">The Game Continues</p><h2 className="mt-2 font-heading text-3xl font-extrabold tracking-[-.05em]">Every match has a story.</h2><p className="mt-2 text-sm text-[#A8B5C0]">Explore more fixtures and follow the competition.</p></div><Link href="/matches" className="inline-flex shrink-0 items-center gap-3 self-start rounded-lg bg-[#F5C66C] px-6 py-3 text-xs font-extrabold uppercase text-[#11161C] transition hover:bg-[#FFDA91]">Browse All Matches <ArrowRight size={16} /></Link></div></section>
+  </main>;
 }

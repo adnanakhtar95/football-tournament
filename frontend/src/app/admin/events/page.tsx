@@ -1,737 +1,87 @@
-
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { ArrowLeft, ArrowRight, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, Clock3, Edit3, Filter, Flag, LoaderCircle, Plus, RefreshCw, Search, Shield, Sparkles, Trash2, Trophy, X } from "lucide-react";
 
-const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
-
+const API_BASE_URL = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api").replace(/\/$/, "");
 type EventStatus = "draft" | "active" | "completed";
+interface TournamentEvent { id: number; name: string; description: string; start_date: string; end_date: string; status: EventStatus; }
+interface EventForm { name: string; description: string; start_date: string; end_date: string; status: EventStatus; }
+const EMPTY_FORM: EventForm = { name: "", description: "", start_date: "", end_date: "", status: "draft" };
+const inputClass = "w-full min-w-0 rounded-xl border border-[#2B496A] bg-[#09182A] px-4 py-3 text-[13px] text-white outline-none transition placeholder:text-[#627F9F] focus:border-[#438FFF] focus:ring-2 focus:ring-[#438FFF]/15";
+const labelClass = "mb-2 block text-[10px] font-black uppercase tracking-[.13em] text-[#9BB8D8]";
+const pad = (n: number) => String(n).padStart(2, "0");
+const datePart = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const localValue = (d: Date) => `${datePart(d)}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+function toLocal(value: string) { if (!value) return ""; const d = new Date(value); return Number.isNaN(d.getTime()) ? "" : localValue(d); }
+function prettyDate(value: string) { if (!value) return "Not scheduled"; const d = new Date(value); return Number.isNaN(d.getTime()) ? "Not scheduled" : d.toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "numeric" }); }
+function prettyTime(value: string) { if (!value) return "—"; const d = new Date(value); return Number.isNaN(d.getTime()) ? "—" : d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }); }
+function getCookie(name: string) { for (const cookie of document.cookie.split(";")) { const [key, ...value] = cookie.trim().split("="); if (key === name) return decodeURIComponent(value.join("=")); } return null; }
+async function getCsrfToken() { const response = await fetch(`${API_BASE_URL}/auth/csrf/`, { credentials: "include" }); if (!response.ok) throw new Error("Unable to initialize CSRF protection."); const token = getCookie("csrftoken"); if (!token) throw new Error("CSRF cookie missing. Use localhost for both frontend and backend."); return token; }
+function apiError(data: unknown, fallback: string) { if (!data || typeof data !== "object") return fallback; const errors = data as Record<string, unknown>; if (typeof errors.detail === "string") return errors.detail; return Object.entries(errors).map(([field, value]) => `${field}: ${Array.isArray(value) ? value.join(", ") : String(value)}`).join(" | ") || fallback; }
 
-interface TournamentEvent {
-  id: number;
-  name: string;
-  description: string;
-  start_date: string;
-  end_date: string;
-  status: EventStatus;
-}
-
-interface EventForm {
-  name: string;
-  description: string;
-  start_date: string;
-  end_date: string;
-  status: EventStatus;
-}
-
-const EMPTY_FORM: EventForm = {
-  name: "",
-  description: "",
-  start_date: "",
-  end_date: "",
-  status: "draft",
-};
-
-const inputClass =
-  "w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-sm text-white outline-none transition placeholder:text-slate-600 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20";
-
-const labelClass = "mb-2 block text-sm font-semibold text-slate-300";
-
-function getCookie(name: string): string | null {
-  for (const cookie of document.cookie.split(";")) {
-    const [key, ...value] = cookie.trim().split("=");
-
-    if (key === name) {
-      return decodeURIComponent(value.join("="));
-    }
-  }
-
-  return null;
-}
-
-async function getCsrfToken(): Promise<string> {
-  const response = await fetch(`${API_BASE_URL}/auth/csrf/`, {
-    method: "GET",
-    credentials: "include",
-  });
-
-  if (!response.ok) {
-    throw new Error("Unable to initialize CSRF protection.");
-  }
-
-  const token = getCookie("csrftoken");
-
-  if (!token) {
-    throw new Error(
-      "CSRF cookie missing. Use localhost for both frontend and backend."
-    );
-  }
-
-  return token;
-}
-
-function getApiError(data: unknown, fallback: string): string {
-  if (!data || typeof data !== "object") {
-    return fallback;
-  }
-
-  const errors = data as Record<string, unknown>;
-
-  if (typeof errors.detail === "string") {
-    return errors.detail;
-  }
-
+/* Custom calendar: no browser-native date popup, so it works consistently in the admin theme. */
+function DateTimePicker({ label, value, onChange, min, disabled = false }: { label: string; value: string; onChange: (value: string) => void; min?: string; disabled?: boolean }) {
+  const [open, setOpen] = useState(false);
+  const selected = value ? new Date(value) : null;
+  const [month, setMonth] = useState(() => selected && !Number.isNaN(selected.getTime()) ? new Date(selected.getFullYear(), selected.getMonth(), 1) : new Date(new Date().getFullYear(), new Date().getMonth(), 1));
+  useEffect(() => { if (open && selected && !Number.isNaN(selected.getTime())) setMonth(new Date(selected.getFullYear(), selected.getMonth(), 1)); }, [open]);
+  const minDate = min ? new Date(min) : null;
+  const startOffset = (month.getDay() + 6) % 7;
+  const days = Array.from({ length: 42 }, (_, i) => new Date(month.getFullYear(), month.getMonth(), i - startOffset + 1));
+  const currentTime = value?.includes("T") ? value.split("T")[1].slice(0, 5) : "09:00";
+  const chooseDay = (day: Date) => { const next = `${datePart(day)}T${currentTime}`; if (min && new Date(next).getTime() < new Date(min).getTime()) { const minimum = new Date(min); onChange(`${datePart(day)}T${pad(minimum.getHours())}:${pad(minimum.getMinutes())}`); } else onChange(next); setOpen(false); };
+  const changeTime = (time: string) => { const day = value?.split("T")[0] || datePart(new Date()); const next = `${day}T${time}`; onChange(min && new Date(next) < new Date(min) ? min : next); };
   return (
-    Object.entries(errors)
-      .map(([field, value]) => {
-        const message = Array.isArray(value)
-          ? value.join(", ")
-          : String(value);
-
-        return `${field}: ${message}`;
-      })
-      .join(" | ") || fallback
+    <div className="relative min-w-0">
+      <label className={labelClass}>{label}</label>
+      <button type="button" disabled={disabled} onClick={() => setOpen(!open)} className={`${inputClass} flex min-h-[51px] items-center justify-between gap-3 text-left disabled:opacity-50`} aria-expanded={open}>
+        <span className="flex min-w-0 items-center gap-3"><CalendarDays size={17} className="shrink-0 text-[#65A8FF]" /><span className={value ? "truncate text-white" : "truncate text-[#6485A9]"}>{value ? prettyDate(value) : "Choose a date"}</span></span>
+        <ChevronDown size={15} className={`shrink-0 text-[#84A7CB] transition ${open ? "rotate-180" : ""}`} />
+      </button>
+      <div className="mt-2 flex items-center gap-2"><Clock3 size={13} className="shrink-0 text-[#759DC7]" /><span className="text-[10px] font-bold uppercase tracking-wider text-[#7897B8]">Kickoff time</span><input type="time" value={currentTime} disabled={disabled} onChange={(e) => changeTime(e.target.value)} className="ml-auto min-w-0 max-w-[125px] rounded-md border border-[#294967] bg-[#0B2036] px-2 py-1.5 text-[12px] text-white outline-none [color-scheme:dark] focus:border-[#438FFF] disabled:opacity-40" /></div>
+      {open && !disabled && <div className="absolute left-0 top-[calc(100%+8px)] z-50 w-[min(340px,calc(100vw-54px))] rounded-xl border border-[#3B6591] bg-[#10243C] p-4 shadow-[0_24px_70px_rgba(0,0,0,.75)]">
+        <div className="mb-4 flex items-center justify-between"><button type="button" onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() - 1, 1))} className="rounded-lg border border-[#2E5175] p-2 hover:bg-[#1A3B60]" aria-label="Previous month"><ChevronLeft size={16} /></button><strong className="font-heading text-[14px] uppercase tracking-wide">{month.toLocaleDateString(undefined, { month: "long", year: "numeric" })}</strong><button type="button" onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() + 1, 1))} className="rounded-lg border border-[#2E5175] p-2 hover:bg-[#1A3B60]" aria-label="Next month"><ChevronRight size={16} /></button></div>
+        <div className="grid grid-cols-7 gap-1 text-center">{["M", "T", "W", "T", "F", "S", "S"].map((day, i) => <span key={i} className="py-2 text-[10px] font-black text-[#7197BF]">{day}</span>)}{days.map((day, i) => { const chosen = selected && datePart(selected) === datePart(day); const outside = day.getMonth() !== month.getMonth(); const invalid = !!minDate && new Date(`${datePart(day)}T23:59`) < minDate; const today = datePart(day) === datePart(new Date()); return <button key={i} type="button" disabled={invalid} onClick={() => chooseDay(day)} className={`aspect-square rounded-lg text-[12px] font-bold transition ${chosen ? "bg-[#3287FF] text-white shadow-[0_0_0_2px_rgba(85,164,255,.35)]" : outside ? "text-[#526C8A] hover:bg-[#1A3858]" : "text-[#D6E5F6] hover:bg-[#24517C]"} ${today && !chosen ? "ring-1 ring-inset ring-[#6A9FE0]" : ""} disabled:cursor-not-allowed disabled:opacity-20`}>{day.getDate()}</button>; })}</div>
+        <div className="mt-4 flex items-center justify-between border-t border-[#2B4A69] pt-3"><button type="button" onClick={() => { const now = new Date(); const target = minDate && now < minDate ? minDate : now; onChange(localValue(target)); setMonth(new Date(target.getFullYear(), target.getMonth(), 1)); setOpen(false); }} className="text-[11px] font-black text-[#8FC4FF]">Today</button><button type="button" onClick={() => setOpen(false)} className="rounded-md bg-[#1D436B] px-3 py-2 text-[10px] font-bold text-white">Done</button></div>
+      </div>}
+    </div>
   );
 }
 
-function toDateTimeLocal(value: string): string {
-  if (!value) return "";
-
-  const date = new Date(value);
-
-  if (Number.isNaN(date.getTime())) {
-    return "";
-  }
-
-  const pad = (number: number) => String(number).padStart(2, "0");
-
-  return [
-    date.getFullYear(),
-    "-",
-    pad(date.getMonth() + 1),
-    "-",
-    pad(date.getDate()),
-    "T",
-    pad(date.getHours()),
-    ":",
-    pad(date.getMinutes()),
-  ].join("");
-}
-
-function formatDate(value: string): string {
-  if (!value) return "Not specified";
-
-  const date = new Date(value);
-
-  if (Number.isNaN(date.getTime())) {
-    return value;
-  }
-
-  return date.toLocaleString();
-}
-
-function statusClass(status: EventStatus): string {
-  switch (status) {
-    case "active":
-      return "border-green-800 bg-green-950/50 text-green-400";
-
-    case "completed":
-      return "border-blue-800 bg-blue-950/50 text-blue-400";
-
-    default:
-      return "border-slate-600 bg-slate-800 text-slate-300";
-  }
-}
+const statusStyle: Record<EventStatus, string> = { active: "border-[#3D7BBA] bg-[#143D65] text-[#A1D0FF]", draft: "border-[#526580] bg-[#26364A] text-[#B9C8DB]", completed: "border-[#947349] bg-[#3B3025] text-[#E7C38A]" };
+const bannerImages = ["photo-1522778119026-d647f0596c20", "photo-1574629810360-7efbbe195018", "photo-1459865264687-595ecaa0f4a7", "photo-1518091043644-c1d4457512c6"];
 
 export default function AdminEventsPage() {
   const [events, setEvents] = useState<TournamentEvent[]>([]);
   const [form, setForm] = useState<EventForm>({ ...EMPTY_FORM });
-
   const [editingId, setEditingId] = useState<number | null>(null);
-
+  const [formOpen, setFormOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [deletingId, setDeletingId] = useState<number | null>(null);
-
   const [message, setMessage] = useState("");
-  const [messageType, setMessageType] = useState<"success" | "error">(
-    "success"
-  );
-
-  
-const loadEvents = useCallback(async () => {
-  try {
-    setLoading(true);
-
-    const allEvents: TournamentEvent[] = [];
-
-    let nextUrl: string | null =
-      `${API_BASE_URL}/admin/events/`;
-
-    while (nextUrl !== null) {
-      const currentUrl: string = nextUrl;
-
-      const response = await fetch(currentUrl, {
-        method: "GET",
-        credentials: "include",
-        cache: "no-store",
-      });
-
-      if (!response.ok) {
-        throw new Error(
-          `Unable to load events (HTTP ${response.status}).`
-        );
-      }
-
-      const data = await response.json();
-
-      if (Array.isArray(data)) {
-        allEvents.push(...data);
-        nextUrl = null;
-      } else {
-        allEvents.push(...(data.results ?? []));
-
-        nextUrl = data.next
-          ? new URL(data.next, currentUrl).toString()
-          : null;
-      }
-    }
-
-    setEvents(allEvents);
-  } catch (error) {
-    setMessageType("error");
-
-    setMessage(
-      error instanceof Error
-        ? error.message
-        : "Unable to connect to the backend."
-    );
-  } finally {
-    setLoading(false);
-  }
-}, []);
-
-  useEffect(() => {
-    void loadEvents();
-  }, [loadEvents]);
-
-  function showMessage(
-    text: string,
-    type: "success" | "error" = "success"
-  ) {
-    setMessage(text);
-    setMessageType(type);
-  }
-
-  function resetForm() {
-    setEditingId(null);
-    setForm({ ...EMPTY_FORM });
-  }
-
-  function beginEditing(event: TournamentEvent) {
-    setEditingId(event.id);
-
-    setForm({
-      name: event.name,
-      description: event.description ?? "",
-      start_date: toDateTimeLocal(event.start_date),
-      end_date: toDateTimeLocal(event.end_date),
-      status: event.status,
-    });
-
-    setMessage("");
-
-    window.scrollTo({
-      top: 0,
-      behavior: "smooth",
-    });
-  }
-
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
-    if (saving) return;
-
-    if (new Date(form.end_date) < new Date(form.start_date)) {
-      showMessage(
-        "End date cannot be earlier than the start date.",
-        "error"
-      );
-      return;
-    }
-
-    setSaving(true);
-    setMessage("");
-
-    const isEditing = editingId !== null;
-
-    try {
-      const csrfToken = await getCsrfToken();
-
-      const url = isEditing
-        ? `${API_BASE_URL}/admin/events/${editingId}/`
-        : `${API_BASE_URL}/admin/events/`;
-
-      const response = await fetch(url, {
-        method: isEditing ? "PATCH" : "POST",
-        credentials: "include",
-        headers: {
-          "Content-Type": "application/json",
-          "X-CSRFToken": csrfToken,
-        },
-        body: JSON.stringify(form),
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(
-          getApiError(
-            data,
-            isEditing
-              ? "Unable to update event."
-              : "Unable to create event."
-          )
-        );
-      }
-
-      resetForm();
-
-      await loadEvents();
-
-      showMessage(
-        isEditing
-          ? "Event updated successfully."
-          : "Event created successfully."
-      );
-    } catch (err) {
-      showMessage(
-        err instanceof Error ? err.message : "Unable to save event.",
-        "error"
-      );
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function deleteEvent(event: TournamentEvent) {
-    if (deletingId !== null) return;
-
-    const confirmed = window.confirm(
-      `Delete "${event.name}"?\n\nThis may also remove related tournament data. This action cannot be undone.`
-    );
-
-    if (!confirmed) return;
-
-    setDeletingId(event.id);
-    setMessage("");
-
-    try {
-      const csrfToken = await getCsrfToken();
-
-      const response = await fetch(
-        `${API_BASE_URL}/admin/events/${event.id}/`,
-        {
-          method: "DELETE",
-          credentials: "include",
-          headers: {
-            "X-CSRFToken": csrfToken,
-          },
-        }
-      );
-
-      if (!response.ok) {
-        const data = await response.json().catch(() => ({}));
-
-        throw new Error(
-          getApiError(data, "Unable to delete event.")
-        );
-      }
-
-      if (editingId === event.id) {
-        resetForm();
-      }
-
-      await loadEvents();
-      showMessage("Event deleted successfully.");
-    } catch (err) {
-      showMessage(
-        err instanceof Error ? err.message : "Unable to delete event.",
-        "error"
-      );
-    } finally {
-      setDeletingId(null);
-    }
-  }
-
-  const activeCount = events.filter(
-    (event) => event.status === "active"
-  ).length;
-
-  const draftCount = events.filter(
-    (event) => event.status === "draft"
-  ).length;
-
-  const completedCount = events.filter(
-    (event) => event.status === "completed"
-  ).length;
-
-  return (
-    <main className="min-h-screen bg-slate-950 text-white">
-      <div className="mx-auto max-w-7xl px-5 py-10 sm:px-8">
-        {/* Header */}
-
-        <header className="mb-9">
-          <Link
-            href="/admin"
-            className="text-sm font-medium text-blue-400 transition hover:text-blue-300"
-          >
-            ← Admin Dashboard
-          </Link>
-
-          <div className="mt-7">
-            <p className="text-xs font-bold uppercase tracking-[0.25em] text-blue-400">
-              Tournament Administration
-            </p>
-
-            <h1 className="mt-3 text-4xl font-bold tracking-tight">
-              Event Management
-            </h1>
-
-            <p className="mt-3 text-sm text-slate-400">
-              Create, edit and manage football tournaments.
-            </p>
-          </div>
-        </header>
-
-        {/* Summary cards */}
-
-        <section className="mb-8 grid grid-cols-2 gap-4 lg:grid-cols-4">
-          {[
-            { label: "Total Events", value: events.length },
-            { label: "Active", value: activeCount },
-            { label: "Draft", value: draftCount },
-            { label: "Completed", value: completedCount },
-          ].map((item) => (
-            <div
-              key={item.label}
-              className="rounded-2xl border border-slate-800 bg-slate-900 p-5"
-            >
-              <p className="text-sm text-slate-400">
-                {item.label}
-              </p>
-
-              <p className="mt-3 text-3xl font-bold text-white">
-                {item.value}
-              </p>
-            </div>
-          ))}
-        </section>
-
-        {/* Feedback */}
-
-        {message && (
-          <div
-            role="alert"
-            className={`mb-7 rounded-xl border px-5 py-4 text-sm ${
-              messageType === "error"
-                ? "border-red-900 bg-red-950/40 text-red-300"
-                : "border-green-900 bg-green-950/30 text-green-300"
-            }`}
-          >
-            {message}
-          </div>
-        )}
-
-        {/* Create / Edit form */}
-
-        <section className="mb-11 rounded-3xl border border-slate-800 bg-slate-900 p-6 sm:p-8">
-          <div className="mb-7 flex flex-wrap items-start justify-between gap-4">
-            <div>
-              <h2 className="text-2xl font-bold">
-                {editingId !== null
-                  ? `Edit Event #${editingId}`
-                  : "Create New Event"}
-              </h2>
-
-              <p className="mt-2 text-sm text-slate-400">
-                {editingId !== null
-                  ? "Update the selected tournament information."
-                  : "Set up a new football tournament."}
-              </p>
-            </div>
-
-            {editingId !== null && (
-              <button
-                type="button"
-                onClick={resetForm}
-                disabled={saving}
-                className="rounded-xl border border-slate-700 px-4 py-2 text-sm text-slate-300 transition hover:border-slate-500 hover:text-white disabled:opacity-50"
-              >
-                Cancel Editing
-              </button>
-            )}
-          </div>
-
-          <form
-            onSubmit={handleSubmit}
-            className="grid gap-5 md:grid-cols-2"
-          >
-            <div className="md:col-span-2">
-              <label htmlFor="event-name" className={labelClass}>
-                Event Name
-              </label>
-
-              <input
-                id="event-name"
-                type="text"
-                value={form.name}
-                onChange={(e) =>
-                  setForm((current) => ({
-                    ...current,
-                    name: e.target.value,
-                  }))
-                }
-                placeholder="e.g. Islamabad Football Cup"
-                className={inputClass}
-                required
-              />
-            </div>
-
-            <div className="md:col-span-2">
-              <label htmlFor="event-description" className={labelClass}>
-                Description
-              </label>
-
-              <textarea
-                id="event-description"
-                value={form.description}
-                onChange={(e) =>
-                  setForm((current) => ({
-                    ...current,
-                    description: e.target.value,
-                  }))
-                }
-                placeholder="Describe the tournament..."
-                rows={4}
-                className={`${inputClass} resize-y`}
-              />
-            </div>
-
-            <div>
-              <label htmlFor="start-date" className={labelClass}>
-                Start Date
-              </label>
-
-              <input
-                id="start-date"
-                type="datetime-local"
-                value={form.start_date}
-                onChange={(e) =>
-                  setForm((current) => ({
-                    ...current,
-                    start_date: e.target.value,
-                  }))
-                }
-                className={inputClass}
-                required
-              />
-            </div>
-
-            <div>
-              <label htmlFor="end-date" className={labelClass}>
-                End Date
-              </label>
-
-              <input
-                id="end-date"
-                type="datetime-local"
-                value={form.end_date}
-                min={form.start_date || undefined}
-                onChange={(e) =>
-                  setForm((current) => ({
-                    ...current,
-                    end_date: e.target.value,
-                  }))
-                }
-                className={inputClass}
-                required
-              />
-            </div>
-
-            <div>
-              <label htmlFor="event-status" className={labelClass}>
-                Status
-              </label>
-
-              <select
-                id="event-status"
-                value={form.status}
-                onChange={(e) =>
-                  setForm((current) => ({
-                    ...current,
-                    status: e.target.value as EventStatus,
-                  }))
-                }
-                className={inputClass}
-              >
-                <option value="draft">Draft</option>
-                <option value="active">Active</option>
-                <option value="completed">Completed</option>
-              </select>
-            </div>
-
-            <div className="flex items-end">
-              <button
-                type="submit"
-                disabled={saving}
-                className="w-full rounded-xl bg-blue-600 px-5 py-3 font-semibold text-white transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {saving
-                  ? "Saving..."
-                  : editingId !== null
-                    ? "Save Changes"
-                    : "+ Create Event"}
-              </button>
-            </div>
-          </form>
-        </section>
-
-        {/* Existing events */}
-
-        <section>
-          <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
-            <div>
-              <h2 className="text-2xl font-bold">
-                Existing Events
-              </h2>
-
-              <p className="mt-2 text-sm text-slate-400">
-                Manage your tournament records.
-              </p>
-            </div>
-
-            <button
-              type="button"
-              onClick={() => void loadEvents()}
-              disabled={loading}
-              className="rounded-xl border border-slate-700 bg-slate-900 px-5 py-2.5 text-sm font-medium text-slate-300 transition hover:border-blue-500 hover:text-white disabled:opacity-50"
-            >
-              {loading ? "Loading..." : "Refresh"}
-            </button>
-          </div>
-
-          {loading ? (
-            <div className="rounded-3xl border border-slate-800 bg-slate-900 py-16 text-center">
-              <div className="mx-auto h-9 w-9 animate-spin rounded-full border-4 border-slate-700 border-t-blue-500" />
-
-              <p className="mt-5 text-sm text-slate-400">
-                Loading tournament events...
-              </p>
-            </div>
-          ) : events.length === 0 ? (
-            <div className="rounded-3xl border border-dashed border-slate-700 bg-slate-900 px-6 py-16 text-center">
-              <div className="text-5xl">🏆</div>
-
-              <h3 className="mt-5 text-xl font-semibold">
-                No events yet
-              </h3>
-
-              <p className="mt-3 text-sm text-slate-400">
-                Create your first tournament using the form above.
-              </p>
-            </div>
-          ) : (
-            <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
-              {events.map((event) => (
-                <article
-                  key={event.id}
-                  className="flex flex-col rounded-2xl border border-slate-800 bg-slate-900 p-6 transition hover:border-slate-600"
-                >
-                  <div className="mb-5 flex items-center justify-between gap-3">
-                    <span
-                      className={`rounded-full border px-3 py-1 text-xs font-bold uppercase tracking-wide ${statusClass(
-                        event.status
-                      )}`}
-                    >
-                      {event.status}
-                    </span>
-
-                    <span className="text-xs text-slate-500">
-                      Event #{event.id}
-                    </span>
-                  </div>
-
-                  <h3 className="text-xl font-bold text-white">
-                    {event.name}
-                  </h3>
-
-                  <p className="mt-3 min-h-12 flex-1 text-sm leading-6 text-slate-400">
-                    {event.description || "No description provided."}
-                  </p>
-
-                  <div className="mt-6 space-y-4 border-y border-slate-800 py-5">
-                    <div>
-                      <p className="text-xs font-bold uppercase tracking-wide text-slate-500">
-                        Start Date
-                      </p>
-
-                      <p className="mt-1 text-sm text-slate-200">
-                        {formatDate(event.start_date)}
-                      </p>
-                    </div>
-
-                    <div>
-                      <p className="text-xs font-bold uppercase tracking-wide text-slate-500">
-                        End Date
-                      </p>
-
-                      <p className="mt-1 text-sm text-slate-200">
-                        {formatDate(event.end_date)}
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="mt-5 flex flex-wrap gap-3">
-                    <button
-                      type="button"
-                      onClick={() => beginEditing(event)}
-                      disabled={saving || deletingId !== null}
-                      className="flex-1 rounded-xl border border-blue-800 bg-blue-950/30 px-4 py-2.5 text-sm font-semibold text-blue-300 transition hover:bg-blue-900/40 disabled:opacity-50"
-                    >
-                      Edit
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => void deleteEvent(event)}
-                      disabled={saving || deletingId !== null}
-                      className="flex-1 rounded-xl border border-red-900 bg-red-950/20 px-4 py-2.5 text-sm font-semibold text-red-300 transition hover:bg-red-950/50 disabled:opacity-50"
-                    >
-                      {deletingId === event.id
-                        ? "Deleting..."
-                        : "Delete"}
-                    </button>
-
-                    <Link
-                      href={`/events/${event.id}`}
-                      className="w-full rounded-xl border border-slate-700 px-4 py-2.5 text-center text-sm font-semibold text-slate-300 transition hover:border-slate-500 hover:text-white"
-                    >
-                      View Public Event →
-                    </Link>
-                  </div>
-                </article>
-              ))}
-            </div>
-          )}
-        </section>
-
-        <footer className="mt-12 border-t border-slate-800 pt-6 text-center text-xs text-slate-500">
-          Football Tournament Management System · Event Administration
-        </footer>
-      </div>
-    </main>
-  );
+  const [messageType, setMessageType] = useState<"success" | "error">("success");
+  const [search, setSearch] = useState("");
+  const [filter, setFilter] = useState<"all" | EventStatus>("all");
+  const loadEvents = useCallback(async () => { try { setLoading(true); const all: TournamentEvent[] = []; const visited = new Set<string>(); let nextUrl: string | null = `${API_BASE_URL}/admin/events/`; while (nextUrl !== null) { const url: string = nextUrl; if (visited.has(url)) throw new Error("Repeated pagination URL."); visited.add(url); const response = await fetch(url, { credentials: "include", cache: "no-store" }); const data = await response.json().catch(() => ({})); if (!response.ok) throw new Error(apiError(data, `Unable to load tournaments (HTTP ${response.status}).`)); if (Array.isArray(data)) { all.push(...data); nextUrl = null; } else { all.push(...(data.results ?? [])); nextUrl = data.next ? new URL(data.next, url).toString() : null; } } setEvents(all); } catch (error) { setMessageType("error"); setMessage(error instanceof Error ? error.message : "Unable to connect to backend."); } finally { setLoading(false); } }, []);
+  useEffect(() => { void loadEvents(); }, [loadEvents]);
+  function notify(text: string, type: "success" | "error" = "success") { setMessage(text); setMessageType(type); }
+  function resetForm() { setEditingId(null); setForm({ ...EMPTY_FORM }); setFormOpen(false); }
+  function beginEditing(item: TournamentEvent) { setEditingId(item.id); setForm({ name: item.name, description: item.description ?? "", start_date: toLocal(item.start_date), end_date: toLocal(item.end_date), status: item.status }); setMessage(""); setFormOpen(true); window.scrollTo({ top: 0, behavior: "smooth" }); }
+  async function handleSubmit(e: FormEvent<HTMLFormElement>) { e.preventDefault(); if (saving) return; if (!form.start_date || !form.end_date) { notify("Please select both tournament dates and times.", "error"); return; } if (new Date(form.end_date) < new Date(form.start_date)) { notify("End date and time cannot be earlier than the start date.", "error"); return; } setSaving(true); setMessage(""); const editing = editingId !== null; try { const csrf = await getCsrfToken(); const response = await fetch(editing ? `${API_BASE_URL}/admin/events/${editingId}/` : `${API_BASE_URL}/admin/events/`, { method: editing ? "PATCH" : "POST", credentials: "include", headers: { "Content-Type": "application/json", "X-CSRFToken": csrf }, body: JSON.stringify(form) }); const data = await response.json().catch(() => ({})); if (!response.ok) throw new Error(apiError(data, editing ? "Unable to update tournament." : "Unable to create tournament.")); resetForm(); await loadEvents(); notify(editing ? "Tournament updated successfully." : "Tournament created successfully."); } catch (error) { notify(error instanceof Error ? error.message : "Unable to save tournament.", "error"); } finally { setSaving(false); } }
+  async function deleteEvent(item: TournamentEvent) { if (deletingId !== null) return; if (!window.confirm(`Delete "${item.name}"?\n\nThis may also remove related tournament data. This cannot be undone.`)) return; setDeletingId(item.id); setMessage(""); try { const csrf = await getCsrfToken(); const response = await fetch(`${API_BASE_URL}/admin/events/${item.id}/`, { method: "DELETE", credentials: "include", headers: { "X-CSRFToken": csrf } }); if (!response.ok) { const data = await response.json().catch(() => ({})); throw new Error(apiError(data, "Unable to delete tournament.")); } if (editingId === item.id) resetForm(); await loadEvents(); notify("Tournament deleted successfully."); } catch (error) { notify(error instanceof Error ? error.message : "Unable to delete tournament.", "error"); } finally { setDeletingId(null); } }
+  const counts = useMemo(() => ({ active: events.filter(e => e.status === "active").length, draft: events.filter(e => e.status === "draft").length, completed: events.filter(e => e.status === "completed").length }), [events]);
+  const visible = useMemo(() => events.filter(e => (filter === "all" || e.status === filter) && `${e.name} ${e.description} ${e.id}`.toLowerCase().includes(search.toLowerCase().trim())).sort((a, b) => new Date(b.start_date).getTime() - new Date(a.start_date).getTime()), [events, filter, search]);
+  return <main className="min-h-full min-w-0 bg-[#060F1D] font-body text-white"><div className="mx-auto max-w-[1650px] px-4 pb-16 pt-7 sm:px-6 xl:px-9">
+    <div className="mb-6 flex flex-wrap items-center justify-between gap-3"><Link href="/admin" className="inline-flex items-center gap-2 text-[11px] font-bold text-[#8EB9E9] hover:text-white"><ArrowLeft size={15} /> Command Overview <span className="text-[#507397]">/</span> <span className="text-white">Tournaments</span></Link><button type="button" onClick={() => { if (formOpen && editingId === null) setFormOpen(false); else { setEditingId(null); setForm({ ...EMPTY_FORM }); setFormOpen(true); } }} className="inline-flex h-10 items-center gap-2 rounded-lg bg-[#267FFF] px-5 text-[11px] font-black uppercase tracking-wide hover:bg-[#4B97FF]"><Plus size={15} /> New Tournament</button></div>
+    <section className="relative isolate overflow-hidden rounded-xl border border-[#35577B] bg-[#102640]"><div className="absolute inset-0 bg-cover bg-center opacity-40" style={{ backgroundImage: "url('https://images.unsplash.com/photo-1522778119026-d647f0596c20?auto=format&fit=crop&w=1800&q=85')" }} /><div className="absolute inset-0 bg-gradient-to-r from-[#071528] via-[#091C33]/95 to-[#071528]/45" /><div className="relative flex min-h-[250px] flex-wrap items-end justify-between gap-6 px-6 py-8 sm:px-9 sm:py-10"><div><p className="mb-4 flex items-center gap-2 text-[10px] font-black uppercase tracking-[.2em] text-[#7CB7FF]"><Sparkles size={13} /> Football Operations / Tournament Registry</p><h1 className="font-heading text-[clamp(34px,5.5vw,67px)] font-black uppercase italic leading-[.96] tracking-[-.065em]">THE TOURNAMENT<br /><span className="text-[#4B9AFF]">DIRECTORY.</span></h1><p className="mt-5 max-w-xl text-[12px] leading-6 text-[#B1C7E0]">Plan the season. Set the dates. Manage every competition from one command centre.</p></div><div className="flex h-20 w-20 items-center justify-center rounded-xl border border-[#4D81BA] bg-[#163A60]/85 shadow-[0_0_50px_rgba(38,127,255,.15)]"><Trophy size={38} className="text-[#E9BF7B]" /></div></div><div className="relative h-[3px] bg-gradient-to-r from-[#267FFF] via-[#7A6DF5] to-transparent" /></section>
+    <section className="my-5 grid grid-cols-2 gap-3 xl:grid-cols-4">{[{ label: "Total Tournaments", value: events.length, icon: Trophy, color: "#5BA5FF" }, { label: "Active Competitions", value: counts.active, icon: Flag, color: "#80C2FF" }, { label: "In Preparation", value: counts.draft, icon: CalendarDays, color: "#AC9AF9" }, { label: "Completed Seasons", value: counts.completed, icon: Check, color: "#EAC58A" }].map(s => { const Icon = s.icon; return <div key={s.label} className="flex min-h-[98px] items-center gap-3 rounded-xl border border-[#2B4969] bg-[#0D2035] p-4"><div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border" style={{ color: s.color, borderColor: `${s.color}55`, background: `${s.color}13` }}><Icon size={19} /></div><div><p className="text-[9px] font-black uppercase tracking-[.1em] text-[#87A8CC]">{s.label}</p><p className="font-heading mt-1 text-[28px] font-black tabular-nums leading-none">{s.value}</p></div></div>; })}</section>
+    {message && <div role="alert" className={`mb-5 flex items-center gap-3 rounded-lg border px-5 py-4 text-[12px] ${messageType === "error" ? "border-[#925066] bg-[#3B2031] text-[#FFB5C4]" : "border-[#427CB5] bg-[#123758] text-[#B9DDFF]"}`}>{messageType === "error" ? <Shield size={16} /> : <Check size={16} />}{message}<button type="button" onClick={() => setMessage("")} className="ml-auto" aria-label="Dismiss"><X size={15} /></button></div>}
+    {formOpen && <section className="mb-7 overflow-visible rounded-xl border border-[#355B81] bg-[#0C1E33]"><div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#2B4C6F] bg-[#122B47] px-5 py-5 sm:px-7"><div><p className="text-[10px] font-black uppercase tracking-[.16em] text-[#7BB8FF]">Tournament Planner</p><h2 className="font-heading mt-1 text-[24px] font-black uppercase tracking-[-.04em]">{editingId !== null ? `Edit Competition #${editingId}` : "Launch New Competition"}</h2></div><button type="button" onClick={resetForm} disabled={saving} className="flex items-center gap-2 rounded-lg border border-[#3B5C7E] px-3 py-2 text-[11px] text-[#B0C9E3] hover:text-white"><X size={14} /> Close Planner</button></div><form onSubmit={handleSubmit} className="grid min-w-0 gap-6 p-5 sm:p-7 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,.9fr)]"><div className="min-w-0 space-y-5"><div><label htmlFor="tournament-name" className={labelClass}>Competition Name</label><input id="tournament-name" required value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="e.g. Islamabad Champions Cup" className={inputClass} /></div><div><label htmlFor="tournament-description" className={labelClass}>Tournament Description</label><textarea id="tournament-description" rows={4} value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} placeholder="What makes this competition special?" className={`${inputClass} min-h-[116px] resize-y`} /></div><div><label htmlFor="tournament-status" className={labelClass}>Competition Status</label><select id="tournament-status" value={form.status} onChange={e => setForm(f => ({ ...f, status: e.target.value as EventStatus }))} className={`${inputClass} [color-scheme:dark]`}><option value="draft">Draft — Preparation</option><option value="active">Active — In Progress</option><option value="completed">Completed — Archived</option></select></div><div className="rounded-lg border border-[#2B4C6E] bg-[#0A192B] p-4"><p className="text-[10px] font-black uppercase tracking-wider text-[#78A7D8]">Live Preview</p><p className="font-heading mt-3 break-words text-[21px] font-black uppercase">{form.name || "YOUR TOURNAMENT NAME"}</p><p className="mt-2 text-[11px] text-[#8DAFD2]">{form.description || "Tournament description will appear here."}</p><span className={`mt-4 inline-flex rounded-md border px-3 py-1.5 text-[9px] font-black uppercase tracking-wider ${statusStyle[form.status]}`}>{form.status}</span></div></div><div className="min-w-0 rounded-xl border border-[#2D4D70] bg-[#0A192B] p-4 sm:p-5"><div className="mb-5 flex items-center gap-2"><CalendarDays size={17} className="text-[#6BB0FF]" /><h3 className="font-heading text-[16px] font-black uppercase">Season Calendar</h3></div><div className="space-y-6"><DateTimePicker label="Opening Date & Time" value={form.start_date} onChange={value => setForm(f => ({ ...f, start_date: value, end_date: f.end_date && new Date(f.end_date) < new Date(value) ? value : f.end_date }))} disabled={saving} /><div className="flex items-center gap-3"><div className="h-px flex-1 bg-[#2D4E70]" /><span className="text-[9px] font-black uppercase tracking-[.15em] text-[#789AC0]">Tournament Window</span><div className="h-px flex-1 bg-[#2D4E70]" /></div><DateTimePicker label="Closing Date & Time" value={form.end_date} min={form.start_date || undefined} onChange={value => setForm(f => ({ ...f, end_date: value }))} disabled={saving} /></div><p className="mt-5 rounded-lg border border-[#2B4D72] bg-[#102945] p-3 text-[10px] leading-5 text-[#9DBDE0]">Choose dates directly from the calendar, then set the time independently. Closing dates cannot precede opening dates.</p><button type="submit" disabled={saving} className="mt-5 flex h-12 w-full items-center justify-center gap-2 rounded-lg bg-[#267FFF] text-[11px] font-black uppercase tracking-[.1em] transition hover:bg-[#4B97FF] disabled:opacity-50">{saving ? <LoaderCircle size={16} className="animate-spin" /> : editingId !== null ? <Check size={16} /> : <Plus size={16} />}{saving ? "Saving Tournament..." : editingId !== null ? "Save Tournament Changes" : "Create Tournament"}</button></div></form></section>}
+    <section className="overflow-hidden rounded-xl border border-[#294868] bg-[#0B1C30]"><div className="flex flex-wrap items-end justify-between gap-4 border-b border-[#2A4968] p-5 sm:p-6"><div><p className="text-[10px] font-black uppercase tracking-[.15em] text-[#78B6FF]">Competition Records</p><h2 className="font-heading mt-1 text-[25px] font-black uppercase tracking-[-.045em]">Tournament <span className="text-[#438FFF]">Registry.</span></h2><p className="mt-2 text-[11px] text-[#89A9CB]">Search, review and manage all registered tournaments.</p></div><button type="button" onClick={() => void loadEvents()} disabled={loading} className="inline-flex h-10 items-center gap-2 rounded-lg border border-[#365C83] bg-[#142D49] px-4 text-[11px] font-bold text-[#A9CCF3] hover:bg-[#1C4067] disabled:opacity-40"><RefreshCw size={14} className={loading ? "animate-spin" : ""} /> Refresh</button></div><div className="flex flex-wrap items-center gap-3 border-b border-[#284563] px-5 py-4 sm:px-6"><div className="relative min-w-[190px] flex-1"><Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#7C9FC4]" /><input type="search" value={search} onChange={e => setSearch(e.target.value)} placeholder="Search tournaments by name, description or ID..." className={`${inputClass} pl-10`} /></div><div className="flex items-center gap-1.5 overflow-x-auto"><Filter size={14} className="mr-1 shrink-0 text-[#7FA4CA]" />{(["all", "active", "draft", "completed"] as const).map(option => <button type="button" key={option} onClick={() => setFilter(option)} className={`whitespace-nowrap rounded-lg px-3 py-2.5 text-[10px] font-black uppercase tracking-wide transition ${filter === option ? "bg-[#267FFF] text-white" : "border border-[#2D4E70] bg-[#10253C] text-[#93B0CF] hover:text-white"}`}>{option}</button>)}</div></div>
+    <div className="p-4 sm:p-6">{loading ? <div className="flex min-h-[250px] flex-col items-center justify-center gap-4 text-[#91B4D9]"><LoaderCircle size={32} className="animate-spin text-[#4C9CFF]" /><p className="text-[11px] font-black uppercase tracking-wider">Loading Tournament Registry</p></div> : visible.length === 0 ? <div className="flex min-h-[250px] flex-col items-center justify-center text-center"><Trophy size={34} className="text-[#729DCC]" /><h3 className="font-heading mt-4 text-[19px] font-black uppercase">No Tournaments Found</h3><p className="mt-2 text-[11px] text-[#8AAACB]">{events.length ? "Try a different search or status filter." : "Create your first tournament using New Tournament."}</p></div> : <div className="grid auto-rows-fr gap-4 md:grid-cols-2 2xl:grid-cols-3">{visible.map((item, index) => <article key={item.id} className="group flex h-full min-h-[395px] min-w-0 flex-col overflow-hidden rounded-xl border border-[#2C4B6C] bg-[#102238] transition hover:-translate-y-1 hover:border-[#4C91DD] hover:shadow-[0_18px_45px_rgba(0,0,0,.28)]"><div className="relative h-[128px] shrink-0 overflow-hidden"><div className="absolute inset-0 bg-cover bg-center transition duration-500 group-hover:scale-105" style={{ backgroundImage: `url('https://images.unsplash.com/${bannerImages[index % bannerImages.length]}?auto=format&fit=crop&w=850&q=75')` }} /><div className="absolute inset-0 bg-gradient-to-t from-[#102238] via-[#0A1C30]/40 to-[#071322]/40" /><span className={`absolute left-4 top-4 rounded-md border px-2.5 py-1.5 text-[9px] font-black uppercase tracking-wider ${statusStyle[item.status]}`}>{item.status}</span><span className="absolute right-4 top-4 rounded-md border border-white/20 bg-black/50 px-2.5 py-1.5 font-mono text-[10px] text-white">#{String(item.id).padStart(3, "0")}</span><div className="absolute bottom-3 left-4 flex h-10 w-10 items-center justify-center rounded-lg border border-[#5C87B2] bg-[#16395B]"><Trophy size={20} className="text-[#E7C18B]" /></div></div><div className="flex min-h-0 flex-1 flex-col px-4 pb-4 pt-3"><h3 className="font-heading min-h-[50px] break-words text-[19px] font-black uppercase leading-[1.25] tracking-[-.035em] [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2] overflow-hidden">{item.name}</h3><p className="mt-2 min-h-[40px] overflow-hidden text-[11px] leading-5 text-[#91ACCA] [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]">{item.description || "Official football tournament competition."}</p><div className="mt-4 grid grid-cols-2 gap-2 border-y border-[#2B4967] py-4"><div className="min-w-0"><p className="mb-1.5 text-[9px] font-black uppercase tracking-wider text-[#7598BE]">Starts</p><p className="text-[11px] font-bold text-[#E1ECF8]">{prettyDate(item.start_date)}</p><p className="mt-1 text-[10px] text-[#83A5C9]">{prettyTime(item.start_date)}</p></div><div className="min-w-0 border-l border-[#2B4967] pl-3"><p className="mb-1.5 text-[9px] font-black uppercase tracking-wider text-[#7598BE]">Ends</p><p className="text-[11px] font-bold text-[#E1ECF8]">{prettyDate(item.end_date)}</p><p className="mt-1 text-[10px] text-[#83A5C9]">{prettyTime(item.end_date)}</p></div></div><div className="mt-auto flex gap-2 pt-4"><button type="button" onClick={() => beginEditing(item)} disabled={saving || deletingId !== null} className="inline-flex h-10 flex-1 items-center justify-center gap-1.5 rounded-lg border border-[#3B75AE] bg-[#163C62] text-[10px] font-black uppercase text-[#A7D1FF] hover:bg-[#235382] disabled:opacity-40"><Edit3 size={13} /> Edit</button><Link href={`/events/${item.id}`} className="inline-flex h-10 flex-1 items-center justify-center gap-1.5 rounded-lg border border-[#3B5876] bg-[#142A42] text-[10px] font-black uppercase text-[#C0D2E6] hover:bg-[#204261]">View <ArrowRight size={13} /></Link><button type="button" onClick={() => void deleteEvent(item)} disabled={saving || deletingId !== null} aria-label={`Delete ${item.name}`} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-[#7D4355] bg-[#3C2330] text-[#F4A1B2] hover:bg-[#633044] disabled:opacity-40">{deletingId === item.id ? <LoaderCircle size={14} className="animate-spin" /> : <Trash2 size={14} />}</button></div></div></article>)}</div>}</div><div className="flex flex-wrap items-center justify-between gap-3 border-t border-[#284563] px-5 py-4 text-[10px] text-[#83A5C8] sm:px-6"><span>Showing {visible.length} of {events.length} competitions</span><span className="flex items-center gap-1.5"><Shield size={12} /> FootballCup Admin Registry</span></div></section>
+    <footer className="mt-8 flex flex-wrap items-center justify-between gap-3 border-t border-[#253F5C] pt-6 text-[10px] font-bold uppercase tracking-[.12em] text-[#7496B9]"><span>FOOTBALLCUP / TOURNAMENT OPERATIONS</span><Link href="/admin/event-teams" className="flex items-center gap-2 text-[#9AC7FF] hover:text-white">Manage Event Teams <ArrowRight size={13} /></Link></footer>
+  </div></main>;
 }
