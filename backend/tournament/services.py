@@ -1970,6 +1970,8 @@ def record_match_event(
 
     valid_types = {
         MatchEvent.EventType.FOUL,
+        MatchEvent.EventType.CHANCE,
+        MatchEvent.EventType.SAVE,
         MatchEvent.EventType.YELLOW_CARD,
         MatchEvent.EventType.RED_CARD,
         MatchEvent.EventType.PENALTY_KICK,

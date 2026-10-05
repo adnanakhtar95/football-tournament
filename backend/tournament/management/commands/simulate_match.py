@@ -704,18 +704,48 @@ class Command(BaseCommand):
             return
 
         # Shot off target.
+        # if attack_roll < 0.56:
+        #     if (
+        #         random.random()
+        #         < 0.20
+        #     ):
+        #         self.stdout.write(
+        #             f"{minute}' CHANCE | "
+        #             f"{self.team_name(attacking_team)} "
+        #             f"fire wide."
+        #         )
+
+        #     return
+        
+                # Shot off target.
         if attack_roll < 0.56:
-            if (
-                random.random()
-                < 0.20
-            ):
+            if random.random() < 0.20:
+                chance_text = random.choice(
+                    [
+                        "A dangerous effort goes wide.",
+                        "The shot flashes just past the post.",
+                        "A promising chance is fired over the bar.",
+                        "A good opening is sent narrowly wide.",
+                        "The attacker gets a sight of goal but misses the target.",
+                    ]
+                )
+
+                record_match_event(
+                    match_id=self.match.id,
+                    team_id=attacking_team,
+                    event_type=MatchEvent.EventType.CHANCE,
+                    minute=minute,
+                    note=chance_text,
+                )
+
                 self.stdout.write(
                     f"{minute}' CHANCE | "
-                    f"{self.team_name(attacking_team)} "
-                    f"fire wide."
+                    f"{self.team_name(attacking_team)} | "
+                    f"{chance_text}"
                 )
 
             return
+        
 
         # Shot on target.
         self.stats[

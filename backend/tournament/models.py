@@ -346,6 +346,10 @@ class MatchEvent(models.Model):
         # Existing football events
         GOAL = "goal", "Goal"
         FOUL = "foul", "Foul"
+
+        CHANCE = "chance", "Chance"
+        SAVE = "save", "Save"
+        
         YELLOW_CARD = "yellow_card", "Yellow Card"
         RED_CARD = "red_card", "Red Card"
         PENALTY_KICK = "penalty_kick", "Penalty Kick"

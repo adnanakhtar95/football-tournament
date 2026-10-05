@@ -203,7 +203,11 @@ function eventLabel(type: string) {
 
   const labels: Record<string, string> = {
 
-    goal: "GOAL!", yellow_card: "Yellow card", red_card: "Red card",
+    goal: "GOAL!", yellow_card: "Yellow card",
+    red_card: "Red card",
+    chance: "CHANCE!",
+    save: "SAVE!",
+    foul: "FOUL",
 
     penalty_kick: "Penalty kick", reward: "Reward points",
 
@@ -244,7 +248,10 @@ function eventSymbol(type: string) {
 
     match_resumed: "▶️",
 
+    chance: "🎯",
+    save: "🧤",
     extra_time: "⏱️",
+    foul: "🚫",
 
     match_finished: "🏁",
     half_time: "⏸️",

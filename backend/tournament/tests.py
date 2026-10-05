@@ -1,14 +1,8 @@
-from django.test import TestCase
-
-# Create your tests here.
-
 from unittest.mock import patch
-
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.test import TestCase
 from django.utils import timezone
-
 from .models import (
     Event,
     EventTeam,
@@ -17,14 +11,16 @@ from .models import (
     Round,
     Team,
 )
-
 from .services import (
     add_team_to_event,
+    end_first_half,
+    end_regulation,
     finish_match,
     get_event_standings,
     record_goal,
     record_match_event,
     start_match,
+    start_second_half,
     validate_match_teams,
 )
 
@@ -32,14 +28,12 @@ from .services import (
 class TournamentTestBase(TestCase):
     """
     Shared test data.
-
     Django creates a separate test database, so these
     records do not affect the development database.
     """
 
     def setUp(self):
         now = timezone.now()
-
         self.event = Event.objects.create(
             name="Automated Test Tournament",
             description="Tournament used for automated tests.",
@@ -47,27 +41,22 @@ class TournamentTestBase(TestCase):
             end_date=now + timezone.timedelta(days=7),
             status=Event.Status.ACTIVE,
         )
-
         self.home_team = Team.objects.create(
             name="Home FC",
             code="HFC",
         )
-
         self.away_team = Team.objects.create(
             name="Away FC",
             code="AFC",
         )
-
         self.third_team = Team.objects.create(
             name="Third FC",
             code="TFC",
         )
-
         self.unregistered_team = Team.objects.create(
             name="Unregistered FC",
             code="UFC",
         )
-
         for team in (
             self.home_team,
             self.away_team,
@@ -77,13 +66,11 @@ class TournamentTestBase(TestCase):
                 event=self.event,
                 team=team,
             )
-
         self.round = Round.objects.create(
             event=self.event,
             name="Round 1",
             order_number=1,
         )
-
         self.match = Match.objects.create(
             round=self.round,
             home_team=self.home_team,
@@ -96,16 +83,19 @@ class TournamentTestBase(TestCase):
         """
         Start the match without requiring Redis.
         """
-
         with patch("tournament.services.broadcast_match_update"):
             return start_match(self.match.id)
 
     def finish_test_match(self):
         """
-        Finish the match without requiring Redis.
+        Progress a live regulation match through the valid lifecycle and finish it.
+        Production rules do not allow a normal match to jump directly from the
+        first half to full time.
         """
-
         with patch("tournament.services.broadcast_match_update"):
+            end_first_half(self.match.id)
+            start_second_half(self.match.id)
+            end_regulation(self.match.id)
             return finish_match(self.match.id)
 
 
@@ -116,16 +106,13 @@ class MatchModelTests(TournamentTestBase):
             self.match.status,
             Match.Status.SCHEDULED,
         )
-
         self.assertEqual(self.match.home_score, 0)
         self.assertEqual(self.match.away_score, 0)
-
         self.assertIsNone(self.match.started_at)
         self.assertIsNone(self.match.ended_at)
 
     def test_team_cannot_play_against_itself(self):
         self.match.away_team = self.home_team
-
         with self.assertRaises(ValidationError):
             self.match.full_clean()
 
@@ -194,31 +181,24 @@ class MatchLifecycleTests(TournamentTestBase):
 
     def test_scheduled_match_can_start(self):
         self.start_test_match()
-
         self.match.refresh_from_db()
-
         self.assertEqual(
             self.match.status,
             Match.Status.LIVE,
         )
-
         self.assertIsNotNone(self.match.started_at)
 
     def test_match_cannot_start_twice(self):
         self.start_test_match()
-
         with self.assertRaises(ValidationError):
             start_match(self.match.id)
 
     def test_draft_event_match_cannot_start(self):
         self.event.status = Event.Status.DRAFT
         self.event.save(update_fields=["status"])
-
         with self.assertRaises(ValidationError):
             start_match(self.match.id)
-
         self.match.refresh_from_db()
-
         self.assertEqual(
             self.match.status,
             Match.Status.SCHEDULED,
@@ -228,23 +208,19 @@ class MatchLifecycleTests(TournamentTestBase):
         with self.assertRaises(ValidationError):
             finish_match(self.match.id)
 
-    def test_live_match_can_finish(self):
+    def test_live_match_can_finish_after_regulation_lifecycle(self):
         self.start_test_match()
         self.finish_test_match()
-
         self.match.refresh_from_db()
-
         self.assertEqual(
             self.match.status,
             Match.Status.FINISHED,
         )
-
         self.assertIsNotNone(self.match.ended_at)
 
     def test_finished_match_cannot_finish_again(self):
         self.start_test_match()
         self.finish_test_match()
-
         with self.assertRaises(ValidationError):
             finish_match(self.match.id)
 
@@ -252,35 +228,32 @@ class MatchLifecycleTests(TournamentTestBase):
         with patch(
             "tournament.services.broadcast_match_update"
         ) as broadcast:
-
             with self.captureOnCommitCallbacks(execute=True) as callbacks:
                 start_match(self.match.id)
-
             self.assertEqual(len(callbacks), 1)
-
             broadcast.assert_called_once()
-
             args = broadcast.call_args.args
-
             self.assertEqual(args[0].id, self.match.id)
             self.assertEqual(args[1], "match_started")
 
     def test_finish_schedules_realtime_broadcast(self):
         self.start_test_match()
 
-        with patch(
-            "tournament.services.broadcast_match_update"
-        ) as broadcast:
+        # Move the match into a valid state for finish_match().
+        with patch("tournament.services.broadcast_match_update"):
+            end_first_half(self.match.id)
+            start_second_half(self.match.id)
+            end_regulation(self.match.id)
 
+        # Assert only the realtime broadcast scheduled by finish_match().
+        with patch("tournament.services.broadcast_match_update") as broadcast:
             with self.captureOnCommitCallbacks(execute=True) as callbacks:
                 finish_match(self.match.id)
 
             self.assertEqual(len(callbacks), 1)
-
             broadcast.assert_called_once()
 
             args = broadcast.call_args.args
-
             self.assertEqual(args[0].id, self.match.id)
             self.assertEqual(args[1], "match_finished")
 
@@ -299,19 +272,15 @@ class GoalTests(TournamentTestBase):
                 minute=12,
                 player_name="Adnan",
             )
-
         self.match.refresh_from_db()
-
         self.assertEqual(self.match.home_score, 1)
         self.assertEqual(self.match.away_score, 0)
-
         self.assertEqual(
             event.type,
             MatchEvent.EventType.GOAL,
         )
-
         self.assertEqual(event.player_name, "Adnan")
-        self.assertEqual(event.minute, 12)
+        self.assertEqual(event.minute, 0)
 
     def test_away_goal_increases_away_score(self):
         with patch("tournament.services.broadcast_match_update"):
@@ -321,9 +290,7 @@ class GoalTests(TournamentTestBase):
                 minute=30,
                 player_name="Qasim",
             )
-
         self.match.refresh_from_db()
-
         self.assertEqual(self.match.home_score, 0)
         self.assertEqual(self.match.away_score, 1)
 
@@ -334,25 +301,24 @@ class GoalTests(TournamentTestBase):
                 team_id=self.third_team.id,
                 minute=15,
             )
-
         self.match.refresh_from_db()
-
         self.assertEqual(self.match.home_score, 0)
         self.assertEqual(self.match.away_score, 0)
 
-    def test_invalid_goal_minute_is_rejected(self):
-        for minute in (-1, 121):
-            with self.subTest(minute=minute):
-                with self.assertRaises(ValidationError):
-                    record_goal(
+    def test_goal_uses_authoritative_match_clock(self):
+        """Caller-supplied minutes are ignored in favor of the server clock."""
+        for supplied_minute in (-1, 121):
+            with self.subTest(supplied_minute=supplied_minute):
+                with patch("tournament.services.broadcast_match_update"):
+                    event = record_goal(
                         match_id=self.match.id,
                         team_id=self.home_team.id,
-                        minute=minute,
+                        minute=supplied_minute,
                     )
+                self.assertEqual(event.minute, 0)
 
     def test_finished_match_cannot_receive_goal(self):
         self.finish_test_match()
-
         with self.assertRaises(ValidationError):
             record_goal(
                 match_id=self.match.id,
@@ -364,7 +330,6 @@ class GoalTests(TournamentTestBase):
         with patch(
             "tournament.services.broadcast_match_update"
         ) as broadcast:
-
             with self.captureOnCommitCallbacks(execute=True) as callbacks:
                 event = record_goal(
                     match_id=self.match.id,
@@ -372,13 +337,9 @@ class GoalTests(TournamentTestBase):
                     minute=25,
                     player_name="Ali",
                 )
-
             self.assertEqual(len(callbacks), 1)
-
             broadcast.assert_called_once()
-
             args = broadcast.call_args.args
-
             self.assertEqual(args[0].id, self.match.id)
             self.assertEqual(args[1], "goal_scored")
             self.assertEqual(args[2].id, event.id)
@@ -399,13 +360,11 @@ class MatchEventTests(TournamentTestBase):
                 minute=45,
                 player_name="Qasim",
             )
-
         self.assertEqual(
             event.type,
             MatchEvent.EventType.YELLOW_CARD,
         )
-
-        self.assertEqual(event.minute, 45)
+        self.assertEqual(event.minute, 0)
 
     def test_reward_points_are_stored(self):
         with patch("tournament.services.broadcast_match_update"):
@@ -417,7 +376,6 @@ class MatchEventTests(TournamentTestBase):
                 points=2,
                 note="Fair play bonus",
             )
-
         self.assertEqual(event.points, 2)
         self.assertEqual(event.note, "Fair play bonus")
 
@@ -430,14 +388,16 @@ class MatchEventTests(TournamentTestBase):
                 minute=10,
             )
 
-    def test_invalid_event_minute_is_rejected(self):
-        with self.assertRaises(ValidationError):
-            record_match_event(
+    def test_match_event_uses_authoritative_match_clock(self):
+        """Generic events also use the server-authoritative match clock."""
+        with patch("tournament.services.broadcast_match_update"):
+            event = record_match_event(
                 match_id=self.match.id,
                 team_id=self.home_team.id,
                 event_type=MatchEvent.EventType.YELLOW_CARD,
                 minute=121,
             )
+        self.assertEqual(event.minute, 0)
 
     def test_unrelated_team_cannot_receive_event(self):
         with self.assertRaises(ValidationError):
@@ -450,7 +410,6 @@ class MatchEventTests(TournamentTestBase):
 
     def test_finished_match_cannot_receive_event(self):
         self.finish_test_match()
-
         with self.assertRaises(ValidationError):
             record_match_event(
                 match_id=self.match.id,
@@ -465,33 +424,28 @@ class StandingsTests(TournamentTestBase):
 
     def test_scheduled_match_does_not_count_in_standings(self):
         standings = get_event_standings(self.event.id)
-
         for row in standings:
             self.assertEqual(row["played"], 0)
             self.assertEqual(row["points"], 0)
 
     def test_finished_match_updates_standings_and_rewards(self):
         self.start_test_match()
-
         with patch("tournament.services.broadcast_match_update"):
             record_goal(
                 match_id=self.match.id,
                 team_id=self.home_team.id,
                 minute=10,
             )
-
             record_goal(
                 match_id=self.match.id,
                 team_id=self.home_team.id,
                 minute=25,
             )
-
             record_goal(
                 match_id=self.match.id,
                 team_id=self.away_team.id,
                 minute=40,
             )
-
             record_match_event(
                 match_id=self.match.id,
                 team_id=self.home_team.id,
@@ -500,37 +454,28 @@ class StandingsTests(TournamentTestBase):
                 points=2,
                 note="Simulation bonus",
             )
-
         self.finish_test_match()
-
         standings = get_event_standings(self.event.id)
-
         by_team = {
             row["team_id"]: row
             for row in standings
         }
-
         home = by_team[self.home_team.id]
         away = by_team[self.away_team.id]
-
         # Home wins 2-1:
         # 3 points for winning + 2 reward points.
         self.assertEqual(home["played"], 1)
         self.assertEqual(home["won"], 1)
         self.assertEqual(home["drawn"], 0)
         self.assertEqual(home["lost"], 0)
-
         self.assertEqual(home["goals_for"], 2)
         self.assertEqual(home["goals_against"], 1)
         self.assertEqual(home["goal_difference"], 1)
-
         self.assertEqual(home["reward_points"], 2)
         self.assertEqual(home["points"], 5)
-
         self.assertEqual(away["played"], 1)
         self.assertEqual(away["lost"], 1)
         self.assertEqual(away["points"], 0)
-
         # The winning team should appear first.
         self.assertEqual(
             standings[0]["team_id"],
@@ -540,17 +485,13 @@ class StandingsTests(TournamentTestBase):
     def test_draw_awards_one_point_to_each_team(self):
         self.start_test_match()
         self.finish_test_match()
-
         standings = get_event_standings(self.event.id)
-
         by_team = {
             row["team_id"]: row
             for row in standings
         }
-
         for team in (self.home_team, self.away_team):
             row = by_team[team.id]
-
             self.assertEqual(row["played"], 1)
             self.assertEqual(row["drawn"], 1)
             self.assertEqual(row["points"], 1)
@@ -563,17 +504,13 @@ class EventEnrollmentTests(TournamentTestBase):
             self.event.id,
             self.unregistered_team.id,
         )
-
         second, second_created = add_team_to_event(
             self.event.id,
             self.unregistered_team.id,
         )
-
         self.assertTrue(first_created)
         self.assertFalse(second_created)
-
         self.assertEqual(first.id, second.id)
-
         self.assertEqual(
             EventTeam.objects.filter(
                 event=self.event,

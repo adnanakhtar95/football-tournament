@@ -187,6 +187,9 @@ interface EventTeam {
 type MatchEventType =
   | "goal"
   | "foul"
+  | "chance"
+  | "save"
+
   | "yellow_card"
   | "red_card"
   | "penalty_kick"
@@ -206,7 +209,7 @@ type MatchEventType =
   | "penalty_shootout_finished"
   | "match_finished";
 
-type OtherEventType = | "foul"| "yellow_card" | "red_card" | "penalty_kick" | "reward";
+type OtherEventType = | "foul" | "chance" | "save" | "yellow_card" | "red_card" | "penalty_kick" | "reward";
 
 interface MatchEvent {
   id: number;
@@ -473,6 +476,10 @@ function eventLabel(
     
     goal: "Goal Scored",
     foul: "Foul",
+    
+    chance: "CHANCE!",
+    save: "SAVE!",
+
     yellow_card: "Yellow Card",
     red_card: "Red Card",
     penalty_kick: "Penalty Kick",
@@ -507,6 +514,12 @@ function EventSymbol({
   switch (type) {
     case "foul":
       return <ShieldAlert size={size} />;
+
+    case "chance":
+      return <Target size={size} />;
+
+    case "save":
+      return <Shield size={size} />;
     case "goal":
       return <CircleDot size={size} />;
     case "yellow_card":
@@ -544,6 +557,11 @@ function eventColor(
   switch (type) {
     case "foul":
       return "#924f1f";
+    case "chance":
+      return "#62B0FF";
+
+    case "save":
+      return "#66C7A5";
     case "goal":
       return "#58A6FF";
     case "yellow_card":
@@ -3401,6 +3419,8 @@ export default function MatchControlPage() {
                     {(
                       [
                         "foul",
+                        "chance",
+                        "save",
                         "yellow_card",
                         "red_card",
                         "penalty_kick",
@@ -3413,7 +3433,15 @@ export default function MatchControlPage() {
                         disabled={formDisabled}
                         onClick={() =>
                           setEventType(type)
+                          
                         }
+                        // onClick={() => {
+                        //   setEventType(type);
+                        //   setEventPlayer("");
+                        //   setEventPlayerId("");
+                        //   setEventPoints("");
+                        //   setEventNote("");
+                        // }}
                         className={`flex min-h-[47px] items-center justify-center gap-2 rounded-lg border px-2 text-[10px] font-bold transition disabled:opacity-40 ${eventType === type
                             ? "border-[#927AFF] bg-[#352B60] text-white"
                             : "border-[#304B6A] bg-[#0B1B2D] text-[#9DB9D8] hover:bg-[#193450]"
@@ -3439,11 +3467,21 @@ export default function MatchControlPage() {
 
                 <div className="grid min-w-0 gap-4 sm:grid-cols-[minmax(0,1fr)_115px]">
                   <div className="min-w-0">
-                    <label
+                    {/* <label
                       htmlFor="event-player"
                       className={labelClass}
                     >
                       Registered Player
+                    </label> */}
+                    <label
+                      htmlFor="event-player"
+                      className={labelClass}
+                    >
+                      {eventType === "chance"
+                        ? "Player Creating Chance"
+                        : eventType === "save"
+                          ? "Goalkeeper / Player"
+                          : "Registered Player"}
                     </label>
 
                     <select
@@ -3551,11 +3589,22 @@ export default function MatchControlPage() {
                         event.target.value
                       )
                     }
+                    // placeholder={
+                    //   eventType === "reward"
+                    //     ? "Why is this team receiving bonus points?"
+                    //     : "Optional event details"
+                    // }
                     placeholder={
                       eventType === "reward"
                         ? "Why is this team receiving bonus points?"
-                        : "Optional event details"
-                    }
+                        : eventType === "chance"
+                          ? "e.g. Powerful shot narrowly misses the target"
+                          : eventType === "save"
+                            ? "e.g. Goalkeeper makes an excellent save"
+                            : eventType === "foul"
+                              ? "e.g. Late challenge near the penalty area"
+                              : "Optional event details"
+}
                     disabled={formDisabled}
                     className={`${inputClass} h-auto min-h-[90px] resize-y py-3`}
                   />
