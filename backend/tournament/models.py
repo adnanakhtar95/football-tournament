@@ -122,6 +122,10 @@ class EventTeam(models.Model):
 
 
 class Round(models.Model):
+    class RoundType(models.TextChoices):
+        GROUP = "group", "Group / League"
+        KNOCKOUT = "knockout", "Knockout"
+
     event = models.ForeignKey(
         Event,
         on_delete=models.CASCADE,
@@ -131,6 +135,12 @@ class Round(models.Model):
     name = models.CharField(max_length=100)
 
     order_number = models.PositiveIntegerField()
+
+    round_type = models.CharField(
+        max_length=20,
+        choices=RoundType.choices,
+        default=RoundType.GROUP,
+    )
 
     class Meta:
         ordering = ["order_number"]
@@ -146,8 +156,6 @@ class Round(models.Model):
         return f"{self.event.name} - {self.name}"
 
 
-
-
 class Match(models.Model):
     class Status(models.TextChoices):
         SCHEDULED = "scheduled", "Scheduled"
@@ -161,6 +169,25 @@ class Match(models.Model):
         SECOND_HALF = "second_half", "Second Half"
         REGULATION_ENDED = "regulation_ended", "Regulation Ended"
         FULL_TIME = "full_time", "Full Time"
+        EXTRA_TIME_FIRST_HALF = (
+            "extra_time_first_half",
+            "Extra Time - First Half",
+        )
+
+        EXTRA_TIME_INTERVAL = (
+            "extra_time_interval",
+            "Extra Time Interval",
+        )
+
+        EXTRA_TIME_SECOND_HALF = (
+            "extra_time_second_half",
+            "Extra Time - Second Half",
+        )
+
+        PENALTY_SHOOTOUT = (
+            "penalty_shootout",
+            "Penalty Shootout",
+        )
 
     round = models.ForeignKey(
         Round,
@@ -217,7 +244,11 @@ class Match(models.Model):
     total_paused_seconds = models.PositiveIntegerField(default=0)
 
     extra_time_minutes = models.PositiveSmallIntegerField(default=0)
-
+    # Knockout match configuration
+    is_knockout = models.BooleanField(
+        default=False,
+        help_text="Enable knockout extra time and penalty shootouts.",
+    )
 
     # Football match lifecycle
     phase = models.CharField(
@@ -255,7 +286,41 @@ class Match(models.Model):
     second_half_pause_baseline_seconds = (
         models.PositiveIntegerField(default=0)
     )
+    # Knockout extra-time tracking
+    regulation_elapsed_seconds = models.PositiveIntegerField(
+        default=90 * 60,
+    )
 
+    extra_time_first_half_started_at = models.DateTimeField(
+        null=True,
+        blank=True,
+    )
+
+    extra_time_first_half_elapsed_seconds = models.PositiveIntegerField(
+        default=0,
+    )
+
+    extra_time_first_half_ended_at = models.DateTimeField(
+        null=True,
+        blank=True,
+    )
+
+    extra_time_second_half_started_at = models.DateTimeField(
+        null=True,
+        blank=True,
+    )
+
+    extra_time_pause_baseline_seconds = models.PositiveIntegerField(
+        default=0,
+    )
+
+    extra_time_second_half_pause_baseline_seconds = (
+        models.PositiveIntegerField(default=0)
+    )
+
+    extra_time_elapsed_seconds = models.PositiveIntegerField(
+        default=0,
+    )
 
     class Meta:
         ordering = ["scheduled_at"]
@@ -280,6 +345,7 @@ class MatchEvent(models.Model):
     class EventType(models.TextChoices):
         # Existing football events
         GOAL = "goal", "Goal"
+        FOUL = "foul", "Foul"
         YELLOW_CARD = "yellow_card", "Yellow Card"
         RED_CARD = "red_card", "Red Card"
         PENALTY_KICK = "penalty_kick", "Penalty Kick"
@@ -299,6 +365,35 @@ class MatchEvent(models.Model):
         REGULATION_ENDED = (
             "regulation_ended",
             "Regulation Ended",
+        )
+        EXTRA_TIME_STARTED = (
+            "extra_time_started",
+            "Extra Time Started",
+        )
+
+        EXTRA_TIME_HALF_TIME = (
+            "extra_time_half_time",
+            "Extra Time Half Time",
+        )
+
+        EXTRA_TIME_SECOND_HALF_STARTED = (
+            "et_second_half_started",
+            "Extra Time Second Half Started",
+        )
+
+        EXTRA_TIME_ENDED = (
+            "extra_time_ended",
+            "Extra Time Ended",
+        )
+
+        PENALTY_SHOOTOUT_STARTED = (
+            "shootout_started",
+            "Penalty Shootout Started",
+        )
+
+        PENALTY_SHOOTOUT_FINISHED = (
+            "shootout_finished",
+            "Penalty Shootout Finished",
         )
 
 
@@ -357,4 +452,72 @@ class MatchEvent(models.Model):
             f"{self.match} - "
             f"{self.get_type_display()} - "
             f"{self.minute}'"
+        )
+
+
+class PenaltyShootoutKick(models.Model):
+    """
+    Represents an individual penalty shootout attempt.
+
+    Shootout goals are tracked separately from
+    regular match goals.
+    """
+
+    match = models.ForeignKey(
+        Match,
+        on_delete=models.CASCADE,
+        related_name="shootout_kicks",
+    )
+
+    team = models.ForeignKey(
+        Team,
+        on_delete=models.CASCADE,
+        related_name="shootout_kicks",
+    )
+
+    player = models.ForeignKey(
+        Player,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="shootout_kicks",
+    )
+
+    player_name = models.CharField(
+        max_length=150,
+        blank=True,
+        default="",
+    )
+
+    kick_number = models.PositiveIntegerField()
+
+    scored = models.BooleanField(
+        default=False,
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    class Meta:
+        ordering = ["created_at", "id"]
+
+        constraints = [
+            models.UniqueConstraint(
+                fields=[
+                    "match",
+                    "team",
+                    "kick_number",
+                ],
+                name="unique_team_shootout_kick",
+            ),
+        ]
+
+    def __str__(self):
+        result = "Scored" if self.scored else "Missed"
+
+        return (
+            f"Match {self.match_id} - "
+            f"Team {self.team_id} - "
+            f"Kick {self.kick_number}: {result}"
         )

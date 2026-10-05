@@ -1,307 +1,289 @@
 # Football Tournament Management System
-A full-stack football tournament management application built with Django REST Framework, Django Channels, Next.js and Redis.
 
+A full-stack football tournament management platform built with **Django REST Framework, Django Channels, Next.js, PostgreSQL and Redis**.
 
-The system allows administrators to manage tournaments, teams, rounds and matches while spectators can follow live scores, match events and tournament standings in real time.
-
+The system provides a complete administrator workflow for tournaments, teams, players, rounds and matches, while spectators can browse tournaments, follow standings, view match timelines and receive live score/state updates through WebSockets.
 
 ## 1. Technology Stack
+
 ### Backend
 - Python
-
 - Django 5.2
-
 - Django REST Framework
-
 - Django Channels
-
-- Redis (Memurai can be used on Windows)
-
-- SQLite for local development
-
-- PostgreSQL as the intended production database
-
+- PostgreSQL
+- Redis / Memurai (Redis-compatible option for Windows)
+- `psycopg`
+- `python-dotenv`
 
 ### Frontend
 - Next.js
-
 - React
-
 - TypeScript
-
 - Tailwind CSS
-
 - Native WebSocket API
 
-
 ### Architecture
+
+```text
 Next.js Frontend
-
-      |
-
-      | REST API / Session Authentication
-
-      v
-
+      |
+      | REST API / Session Authentication / CSRF
+      v
 Django REST Framework
-
-      |
-
-      | Business Logic
-
-      v
-
+      |
+      | Centralized business logic
+      v
 Tournament Services
-
-      |
-
-      +------ Database
-
-      |
-
-      +------ Django Channels
-
-                    |
-
-                    v
-
-                  Redis
-
-                    |
-
-                    v
-
-          WebSocket Subscribers
-
+      |
+      +------ PostgreSQL
+      |
+      +------ Django Channels
+                    |
+                    v
+                  Redis
+                    |
+                    v
+             WebSocket Clients
 ```
 
-
-All match-related operations use shared backend service functions. This allows both administrator actions and automated simulations to follow the same business rules and broadcast realtime updates.
-
+Match lifecycle operations are centralized in `tournament/services.py`. Manual administrator actions and automated simulations therefore use the same validation, scoring, state-transition and WebSocket broadcasting logic.
 
 ---
-
 
 ## 2. Features
 
-
 ### Administrator Features
-
-
-- Administrator login and logout.
-
-- Session-based authentication.
-
+- Administrator login/logout with session authentication and CSRF protection.
 - Protected administrative routes.
-
-- Create, update and delete tournaments.
-
-- Manage football teams.
-
-- Register teams for tournaments.
-
-- Create tournament rounds.
-
-- Schedule matches.
-
-- Start and finish matches.
-
-- Record goals and player names.
-
-- Record yellow cards, red cards and penalty kicks.
-
-- Award bonus points.
-
-- View match activity and scores.
-
+- Create, update and delete tournaments/events.
+- Create and manage teams.
+- Register teams in tournaments.
+- Create and manage registered football players.
+- Player positions: goalkeeper, defender, midfielder and forward.
+- Activate/deactivate players.
+- Create tournament rounds and schedule fixtures.
+- Start and control live matches.
+- Pause and resume live matches.
+- Configure first-half and second-half stoppage time.
+- End the first half and start the second half.
+- End regulation time.
+- Control knockout extra time.
+- Control penalty shootouts.
+- Record goals against registered players.
+- Record fouls, yellow cards, red cards and penalty kicks.
+- Award manual reward/bonus points.
+- View live match state, score and chronological activity.
 
 ### Public Features
-
-
 - Browse tournaments.
-
-- View tournament details.
-
+- View tournament details and rounds.
+- Browse teams, players and matches.
+- View individual player profiles.
 - View scheduled, live and completed matches.
-
-- Follow live match scores.
-
+- Follow live scores.
 - View chronological match-event timelines.
-
 - View tournament standings.
-
 - Access a global live scoreboard.
+- Receive realtime match updates without refreshing the page.
 
+### Match Events
+Persisted match events include:
+- Goal
+- Foul
+- Yellow card
+- Red card
+- Penalty kick
+- Reward / bonus points
+- Match started
+- Match paused
+- Match resumed
+- Half-time
+- Second half started
+- Regulation ended
+- Extra time started
+- Extra-time half-time
+- Extra-time second half started
+- Extra time ended
+- Penalty shootout started/finished
+- Match finished
 
-### Realtime Functionality
-
-
-Django Channels and Redis provide WebSocket communication.
-
-
-When a match starts, finishes, or receives a new event, the backend broadcasts updates to connected spectators.
-
-
-The frontend updates without requiring manual page refreshes.
-
+`CHANCE` and `SAVE` messages generated by the simulator are commentary only and are intentionally not stored as match events.
 
 ---
 
+## 3. Complete Match Lifecycle
 
-## 3. Project Structure
+The backend implements a football match as an explicit state machine instead of only using scheduled/live/finished flags.
 
+```text
+NOT STARTED
+    |
+    v
+FIRST HALF
+    |
+    | + stoppage time
+    v
+HALF TIME
+    |
+    v
+SECOND HALF
+    |
+    | + stoppage time
+    v
+REGULATION ENDED
+    |
+    +-------------------------+
+    |                         |
+League / group match      Knockout match
+    |                         |
+    v                         v
+FULL TIME              Winner? ---- Yes ---> FULL TIME
+                              |
+                              No (draw)
+                              v
+                    EXTRA TIME FIRST HALF
+                              |
+                              v
+                    EXTRA TIME INTERVAL
+                              |
+                              v
+                    EXTRA TIME SECOND HALF
+                              |
+                              v
+                       EXTRA TIME ENDED
+                              |
+                        Winner? -- Yes --> FULL TIME
+                              |
+                              No
+                              v
+                     PENALTY SHOOTOUT
+                              |
+                              v
+                          FULL TIME
+```
 
+### Match Clock
+The server owns the authoritative match clock. The frontend and simulation code do not directly decide persisted event times. Match events use the current backend match clock, including pause accounting and the correct phase baseline.
+
+The accelerated simulator backdates phase timestamps so a full football match can be demonstrated in seconds while continuing to use the production service-layer clock calculations.
+
+### Pause / Resume
+Live active phases can be paused and resumed. Paused time is tracked separately and excluded from the active football clock. Pause and resume actions are also broadcast to WebSocket subscribers.
+
+### Stoppage Time
+First-half and second-half stoppage time can be configured through the backend service layer. The simulation also generates realistic stoppage-time values based on match activity.
+
+### Knockout Rules
+A knockout match cannot finish tied. If regulation ends level, the match proceeds through two periods of extra time. If still tied, a penalty shootout determines the winner.
+
+---
+
+## 4. Project Structure
+
+```text
 football-tournament/
-
 |
-
 |-- backend/
-
-|   |-- config/
-
-|   |-- tournament/
-
-|   |   |-- management/
-
-|   |   |   |-- commands/
-
-|   |   |       |-- seed_demo.py
-
-|   |   |       |-- simulate_match.py
-
-|   |   |       |-- simulate_event.py
-
-|   |   |
-
-|   |   |-- models.py
-
-|   |   |-- serializers.py
-
-|   |   |-- services.py
-
-|   |   |-- consumers.py
-
-|   |   |-- routing.py
-
-|   |   |-- views.py
-
-|   |   |-- urls.py
-
-|   |   |-- tests.py
-
-|   |
-
-|   |-- manage.py
-
-|   |-- requirements.txt
-
+|   |-- config/
+|   |-- tournament/
+|   |   |-- management/
+|   |   |   |-- commands/
+|   |   |       |-- seed_demo.py
+|   |   |       |-- simulate_match.py
+|   |   |       |-- simulate_event.py
+|   |   |
+|   |   |-- models.py
+|   |   |-- serializers.py
+|   |   |-- services.py
+|   |   |-- consumers.py
+|   |   |-- routing.py
+|   |   |-- views.py
+|   |   |-- urls.py
+|   |   |-- tests.py
+|   |
+|   |-- manage.py
+|   |-- requirements.txt
 |
-
 |-- frontend/
-
-|   |-- src/
-
-|       |-- app/
-
-|       |-- components/
-
-|       |-- lib/
-
+|   |-- src/
+|       |-- app/
+|       |-- components/
+|       |-- lib/
 |
-
+|-- docs/
 |-- README.md
-
 |-- .gitignore
-
 ```
 
+---
 
-**---**
+## 5. Database Design
 
+The main tournament domain includes:
+- `Event`
+- `Team`
+- `EventTeam`
+- `Player`
+- `Round`
+- `Match`
+- `MatchEvent`
+- `PenaltyShootoutKick`
 
-## Database Design (ERD)
+### Main Relationships
+- **Event ↔ Team:** many-to-many through `EventTeam`.
+- **Team → Player:** one team has multiple registered players.
+- **Event → Round:** one tournament contains multiple rounds.
+- **Round → Match:** one round contains multiple fixtures.
+- **Team → Match:** every fixture references a home and away team.
+- **Match → MatchEvent:** a match has a chronological event timeline.
+- **Team → MatchEvent:** team-specific events reference a participating team.
+- **Player → MatchEvent:** player-specific goals/cards/fouls/penalties can reference the registered player.
+- **Match → PenaltyShootoutKick:** knockout shootout attempts are stored separately from the regulation score.
 
-The Football Tournament Management System uses PostgreSQL with six core tables: Event, Team, EventTeam, Round, Match, and MatchEvent.
+If `docs/database-erd.png` is present, it can be used as the visual ERD reference.
 
-The following Entity Relationship Diagram illustrates the database schema, primary keys, foreign keys, and table relationships.
+---
 
-![Football Tournament Database ERD](docs/database-erd.png)
+## 6. Backend Installation
 
-### Database Relationships
-
-- **Event ↔ Team:** Many-to-many relationship through EventTeam.
-- **Event → Round:** One event contains multiple rounds.
-- **Round → Match:** One round schedules multiple matches.
-- **Team → Match:** Each match references a home team and an away team.
-- **Match → MatchEvent:** One match records multiple activities.
-- **Team → MatchEvent:** Each activity is associated with a participating team.
-
-
-
-## 4. Backend Installation
 ### Requirements
-Install:
+Install Python, Node.js/npm, PostgreSQL, Redis (or Memurai on Windows) and Git.
 
+### Clone
 
-- Python
-
-- Node.js and npm
-
-- Redis or Memurai
-
-- Git
-
-
-### Clone the repository
 ```bash
-
 git clone https://github.com/adnanakhtar95/football-tournament.git
-
 cd football-tournament
-
 ```
 
+### Virtual Environment
 
-### Create a Python virtual environment
 ```bash
-
 cd backend
-
 python -m venv venv
-
 ```
 
-
-Activate it on Windows PowerShell:
-
+Windows PowerShell:
 
 ```powershell
-
 .\venv\Scripts\Activate.ps1
-
 ```
 
-
-On Linux/macOS:
-
+Linux/macOS:
 
 ```bash
-
 source venv/bin/activate
-
 ```
 
+Install dependencies:
 
-### Install backend dependencies
 ```bash
-
 pip install -r requirements.txt
-
 ```
 
-
-### Environment configuration
-Create `backend/.env` with your own PostgreSQL credentials:
+### Environment Configuration
+Create `backend/.env`:
 
 ```dotenv
 DB_NAME=football_tournament
@@ -311,526 +293,340 @@ DB_HOST=localhost
 DB_PORT=5432
 ```
 
-Do not commit `.env` files or database credentials to Git. The backend loads these variables using `python-dotenv`.
+Do not commit `.env` or credentials.
 
-
-### Database setup — PostgreSQL 18
-
-Install PostgreSQL from https://www.postgresql.org/download/ and ensure the server is running on port `5432`.
-
-Using `psql` as the PostgreSQL administrator, create a dedicated application role and database:
+### PostgreSQL Setup
 
 ```sql
 CREATE USER football_user WITH PASSWORD 'YOUR_STRONG_PASSWORD';
 CREATE DATABASE football_tournament OWNER football_user;
 ```
 
-Use the same application password in `backend/.env`. The Django database engine is `django.db.backends.postgresql`, using the `psycopg` driver installed from `requirements.txt`.
-
-Apply migrations to initialize a fresh database:
+Apply migrations and validate Django:
 
 ```bash
 python manage.py migrate
 python manage.py check
 ```
 
-Create an administrator:
+Create an administrator if required:
 
 ```bash
 python manage.py createsuperuser
 ```
 
-**Automated tests:** Django creates a separate temporary PostgreSQL database. For local test runs, the application role needs permission to create databases; as the PostgreSQL administrator, run:
+For Django tests using PostgreSQL, the application role may need temporary database-creation permission:
 
 ```sql
 ALTER ROLE football_user CREATEDB;
 ```
 
-This grants database-creation permission, not PostgreSQL superuser access. It can be revoked after testing with `ALTER ROLE football_user NOCREATEDB;`.
-
-### Start Redis
-Ensure Redis is running on:
-
+### Redis
+Redis/Channels expects the configured Redis server to be available, normally at:
 
 ```text
-
 127.0.0.1:6379
-
 ```
 
-
-On Windows, Memurai can provide Redis-compatible functionality.
-
-
-Verify the connection using:
-
+Verify:
 
 ```bash
-
 redis-cli ping
-
 ```
 
+Expected response: `PONG`.
 
-Expected response:
+### Start Backend
 
-
-```text
-
-PONG
-
-```
-
-
-### Start the Django backend
 ```bash
-
 python manage.py runserver
-
 ```
 
+Backend: `http://localhost:8000`
 
-Backend URL:
+---
 
-
-http://localhost:8000
-
-
-Django administration:
-
-
-http://localhost:8000/admin/
-
-
-**---**
-
-
-## 5. Frontend Installation
-Open another terminal from the project root.
-
+## 7. Frontend Installation
 
 ```bash
-
 cd frontend
-
 npm install
-
 ```
-
 
 Create `frontend/.env.local`:
 
-
 ```env
-
 NEXT_PUBLIC_API_URL=http://localhost:8000/api
-
 ```
 
-
-Start the frontend:
-
+Development:
 
 ```bash
-
 npm run dev
-
 ```
 
+Production verification:
 
-Frontend URL:
+```bash
+npm run build
+npm start
+```
 
+Frontend: `http://localhost:3000`
 
-http://localhost:3000
+Custom administrator dashboard: `http://localhost:3000/admin`
 
+Use `localhost` consistently for frontend and backend during local development so session cookies and CSRF behavior remain consistent.
 
-Custom administrator dashboard:
+---
 
+## 8. API Overview
 
-http://localhost:3000/admin
+### Public Resources
 
-
-Use the Django superuser credentials to sign in.
-
-
-****Important:**** Use `localhost` consistently for both applications to avoid development cookie and session issues.
-
-
-**---**
-
-
-## 6. API Endpoints
-### Public Endpoints
 | Method | Endpoint | Description |
-
 |---|---|---|
-
 | GET | `/api/events/` | List tournaments |
-
 | GET | `/api/events/{id}/` | Tournament details |
-
 | GET | `/api/teams/` | List teams |
-
+| GET | `/api/players/` | List players |
+| GET | `/api/players/{id}/` | Player details |
 | GET | `/api/matches/` | List matches |
-
 | GET | `/api/matches/{id}/` | Match details |
-
 | GET | `/api/matches/{id}/events/` | Match timeline |
-
 | GET | `/api/events/{id}/standings/` | Tournament standings |
-
 | GET | `/api/live/` | Live matches |
 
+### Authentication
 
-### Authentication Endpoints
 | Method | Endpoint | Description |
-
 |---|---|---|
-
 | GET | `/api/auth/csrf/` | Initialize CSRF cookie |
-
-| GET | `/api/auth/me/` | Current session information |
-
+| GET | `/api/auth/me/` | Current session |
 | POST | `/api/auth/login/` | Administrator login |
-
 | POST | `/api/auth/logout/` | Logout |
 
-
-### Administrator Endpoints
-The administrator API provides management routes for:
-
-
-/api/admin/events/
-
-/api/admin/teams/
-
-/api/admin/event-teams/
-
-/api/admin/rounds/
-
-/api/admin/matches/
-
-
-Supported operations include creating, retrieving, updating and deleting the relevant resources, subject to backend validation and permissions.
-
+### Administrator Resources
+Administrative CRUD routes include events, teams, event-team registration, players, rounds and matches under `/api/admin/`.
 
 ### Match Actions
-POST /api/matches/{id}/start/
-
-POST /api/matches/{id}/finish/
-
-POST /api/matches/{id}/goal/
-
-POST /api/matches/{id}/event/
-
+The match API/service layer supports the complete lifecycle, including start, goal/event recording, pause/resume, half-time/second-half transitions, stoppage time, regulation end, extra time, penalty shootout actions and final completion.
 
 Administrative operations require an authenticated staff account.
 
+---
 
-**---**
+## 9. Realtime WebSockets
 
+### Match Channel
 
-## 7. WebSocket Endpoints
-### Individual Match
+```text
 ws://localhost:8000/ws/matches/{match_id}/
+```
 
-
-Broadcasts match-specific updates, including goals, match events and status changes.
-
+Broadcasts match-specific score, event and lifecycle changes.
 
 ### Global Live Scoreboard
+
+```text
 ws://localhost:8000/ws/live/
-
-
-Broadcasts updates affecting the global live scoreboard.
-
-
-### Implementation
-The backend uses Django Channels groups:
-
-
-match_{match_id}
-
-live_scoreboard
-
-
-Match updates are broadcast through shared service functions using transaction commit callbacks, ensuring that updates are sent after successful database transactions.
-
-
-**---**
-
-
-## 8. Match Simulation
-The project includes automated simulation commands.
-
-
-Both manual administrator actions and simulation commands reuse the same backend service functions.
-
-
-### Simulate an Individual Match
-python manage.py simulate_match 7 --speed 1
-
-
-Replace `7` with an existing scheduled match ID.
-
-
-The `--speed` argument specifies the number of real seconds per simulated football minute.
-
-
-Examples:
-
-
-| Speed | Approximate Match Duration |
-
-|---|---|
-
-| `--speed 5` | 7 minutes 30 seconds |
-
-| `--speed 2` | 3 minutes |
-
-| `--speed 1` | 90 seconds |
-
-| `--speed 0.5` | 45 seconds |
-
-| `--speed 0.2` | 18 seconds |
-
-
-During simulation, the command may generate:
-
-
-- Goals.
-
-- Yellow cards.
-
-- Red cards.
-
-- Penalty kicks.
-
-- Bonus-point rewards.
-
-
-Events are generated probabilistically, so individual results vary.
-
-
-### Simulate an Entire Tournament
-```bash
-
-python manage.py simulate_event 3 --speed 1
-
 ```
 
+Broadcasts changes affecting the live-match scoreboard.
 
-Replace `3` with an existing event ID.
+Django Channels groups include match-specific groups and the global live-scoreboard group. Service functions schedule broadcasts with transaction commit callbacks so clients receive updates only after successful database transactions.
 
+---
 
-The command finds all scheduled matches belonging to that event and simulates them sequentially.
+## 10. Match Simulation
 
+The project contains two management commands for realistic demonstrations. They reuse the same service functions used by administrator actions.
 
-****Requirements:****
-
-
-- The tournament must be active.
-
-- At least one scheduled match must exist.
-
-- Matches must have valid registered teams.
-
-
-Previously completed matches are not simulated again.
-
-
-**---**
-
-
-## 9. Demo Data
-A Django management command is available to generate sample tournament data:
-
+### Simulate One Match
 
 ```bash
+python manage.py simulate_match 1 --speed 0.2 --scenario random
+```
 
+Options include:
+- `--speed`: real seconds per simulated football minute.
+- `--scenario random`: normal automatic behavior.
+- `--scenario normal`: force a knockout match to have a regulation winner if required.
+- `--scenario extra-time`: demonstrate a knockout match reaching extra time.
+- `--scenario penalties`: demonstrate a knockout match reaching a shootout.
+- `--seed`: optional reproducible random seed.
+
+The simulator can produce realistic:
+- Goals
+- Fouls
+- Yellow cards
+- Red cards
+- Penalty kicks
+- Shots/chances and saves as console commentary
+- Match pauses/resumes
+- Stoppage time
+- Half-time and second-half transitions
+- Extra time
+- Penalty shootouts
+
+**Reward/bonus-point events are deliberately NOT generated automatically by simulations.** Rewards remain an explicit administrator feature.
+
+### Simulate an Entire Event
+
+```bash
+python manage.py simulate_event 1 --speed 0.15 --match-break 1 --knockout-drama
+```
+
+For a faster demonstration:
+
+```bash
+python manage.py simulate_event 1 --speed 0.03 --match-break 0.2 --knockout-drama
+```
+
+The event simulator processes remaining scheduled matches sequentially and delegates each fixture to `simulate_match`, preserving the production match lifecycle and event services.
+
+`--knockout-drama` increases the probability of demonstrating extra time and penalty shootouts in knockout fixtures. Already completed matches are not simulated again.
+
+---
+
+## 11. Demo Data
+
+Generate demo data with:
+
+```bash
 python manage.py seed_demo
-
 ```
 
+The current demo dataset includes multiple tournaments, teams, registered squads/players, tournament rounds and scheduled fixtures suitable for demonstrating group/league and knockout match flows.
 
-It creates:
+Player data is now a first-class part of the application rather than storing scorer names only as arbitrary text. Match events can reference registered players while retaining display names for event history.
 
+---
 
-- Islamabad Football Cup.
+## 12. Tournament Business Rules
 
-- Four sample teams.
+Important backend rules include:
 
-- Team registrations.
+1. A team cannot play against itself.
+2. Participating teams must belong to the tournament.
+3. Scheduling is validated at the backend.
+4. A match can start only from the appropriate scheduled state and active tournament.
+5. Match lifecycle transitions are phase-aware.
+6. Goals and football events can only be recorded during valid active-play phases.
+7. Event teams must be participating in the match.
+8. A selected player must belong to the selected team and be active.
+9. Goal scoring updates the correct regulation/extra-time match score.
+10. Event minutes are calculated from the authoritative server clock.
+11. Paused time does not incorrectly advance the active football clock.
+12. Stoppage time is supported for regulation halves.
+13. League/group matches may finish level.
+14. Knockout matches cannot finish level.
+15. Tied knockout matches progress through extra time and, if necessary, penalties.
+16. Penalty-shootout goals are tracked independently from the regulation match score.
+17. Manual reward points remain available and are included in standings.
+18. Simulations never automatically generate reward points.
 
-- Three tournament rounds.
+### Standings
 
-- Two initial scheduled matches.
-
-
-The command uses `get_or_create()` to avoid duplicating its existing records.
-
-
-It does not reset previously completed matches or automatically reactivate an existing tournament.
-
-
-**---**
-
-
-## 10. Tournament Business Rules
-The backend enforces the following rules:
-
-
-1\. A team cannot play against itself.
-
-2\. Both participating teams must be registered for the tournament.
-
-3\. A team cannot be scheduled more than once in the same round.
-
-4\. A match can start only when scheduled and its tournament is active.
-
-5\. Only live matches can be finished.
-
-6\. Goals and match events can only be recorded during live matches.
-
-7\. Goals update the appropriate team's score.
-
-8\. Match-event minutes must fall between 0 and 120.
-
-9\. Only supported match-event types are accepted.
-
-10\. Standings are calculated using completed matches.
-
-
-### Standings Calculation
 | Result | Points |
-
 |---|---:|
-
 | Win | 3 |
-
 | Draw | 1 |
-
 | Loss | 0 |
 
+Standings track matches played, wins, draws, losses, goals for, goals against, goal difference and bonus/reward points. Ranking uses the tournament standings logic implemented by the backend.
 
-Additional reward points are included in the total.
+---
 
+## 13. Frontend Routes
 
-Standings also track:
+The production Next.js build includes public and administrator routes such as:
 
-
-- Matches played.
-
-- Wins, draws and losses.
-
-- Goals scored.
-
-- Goals conceded.
-
-- Goal difference.
-
-- Bonus points.
-
-
-Ranking considers total points, goal difference and goals scored.
-
-
-**---**
-
-
-## 11. Automated Testing
-The project includes Django automated tests covering:
-
-
-- Model constraints.
-
-- Tournament registration.
-
-- Match scheduling validation.
-
-- Match status transitions.
-
-- Goal scoring.
-
-- Match events.
-
-- Reward points.
-
-- Tournament standings.
-
-- WebSocket broadcast callback scheduling.
-
-
-Run the test suite:
-
-
-cd backend
-
-python manage.py test tournament --verbosity 2
-
-
-Latest verified local result:
-
-
-Ran 33 tests in 0.989s
-
-
-OK
-
+```text
+/
+/events
+/events/[id]
+/live
+/matches
+/matches/[id]
+/players
+/players/[id]
+/admin
+/admin/login
+/admin/events
+/admin/event-teams
+/admin/teams
+/admin/players
+/admin/rounds
+/admin/matches
+/admin/matches/[id]
 ```
 
-
-Verified locally: all 33 tests passed against PostgreSQL 18. Django creates and destroys a separate temporary test database, leaving application data unaffected.
-
+The frontend has been verified with a successful production `npm run build` after the final match/player/simulation changes.
 
 ---
 
+## 14. Testing and Verification
 
-## 12. Development Notes
+Backend tests can be run with:
 
+```bash
+cd backend
+python manage.py test tournament --verbosity 2
+```
 
-- PostgreSQL 18 is the active local database; Django connects through `psycopg` and `.env` configuration.
+Useful final verification commands:
 
-- Existing SQLite data was migrated locally to PostgreSQL. SQLite is not required for a fresh installation.
+```bash
+python manage.py check
+python manage.py migrate
+```
 
-- Redis/Memurai is required for the configured realtime channel layer.
+Frontend production verification:
 
-- Backend business logic is centralized in `tournament/services.py`.
+```bash
+cd frontend
+npm run build
+```
 
-- Simulation commands reuse existing service functions rather than implementing separate scoring logic.
-
-- Match scorer names are stored as text in match events; a separate Player management module is not currently included.
-
+The final implementation was also exercised using the full-event simulator, including the expanded player/event system and knockout match lifecycle.
 
 ---
 
+## 15. Design Decisions
 
-## 13. Future Improvements
+### Centralized Service Layer
+Business rules are kept in `tournament/services.py` so REST endpoints, administrator controls and simulations do not implement competing versions of match logic.
 
+### Registered Players
+Players are modeled as real domain entities with team membership, position and active status. Goals, fouls, cards and penalties can therefore be attributed to validated squad members.
+
+### Authoritative Clock
+Persisted match-event minutes come from backend clock state. This avoids trusting arbitrary frontend timestamps and keeps manual and simulated match events consistent.
+
+### Separate Shootout Score
+Penalty-shootout kicks determine a knockout winner without corrupting the normal match score.
+
+### Manual Rewards
+Reward points are supported as an administrator-controlled tournament feature and contribute to standings. They are intentionally excluded from automatic simulation generation.
+
+### Realtime Transaction Safety
+WebSocket broadcasts are issued after successful transaction commits, reducing the chance that clients receive state that was later rolled back.
+
+---
+
+## 16. Future Improvements
 
 Potential extensions include:
-
-
-- Dedicated player profiles and squad management.
-
-- Automatic tournament bracket generation.
-
+- Fully automatic bracket generation and winner advancement between knockout rounds.
+- More detailed player statistics and substitutions.
 - Additional Channels integration tests.
-
 - Production deployment configuration.
-
-- Enhanced tournament statistics.
-
+- Advanced tournament statistics and analytics.
 - Docker-based deployment.
-
 
 ---
 
+## 17. Repository
 
-## 14. Repository
-
-
-GitHub:
-
-
-https://github.com/adnanakhtar95/football-tournament
+GitHub: `https://github.com/adnanakhtar95/football-tournament`

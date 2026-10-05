@@ -25,10 +25,40 @@ const WS_BASE_URL = API_BASE_URL.replace(/^http/, "ws").replace(/\/api\/?$/, "")
 
 
 type MatchStatus = "scheduled" | "live" | "finished";
-type MatchPhase = "not_started" | "first_half" | "half_time" | "second_half" | "regulation_ended" | "full_time";
+type MatchPhase =
+  | "not_started"
+  | "first_half"
+  | "half_time"
+  | "second_half"
+  | "regulation_ended"
+  | "extra_time_first_half"
+  | "extra_time_interval"
+  | "extra_time_second_half"
+  | "penalty_shootout"
+  | "full_time";
 
 interface Team { id: number; name: string; code: string; logo: string | null; }
+interface ShootoutKick {
+  id: number;
+  team_id: number;
+  player_id: number | null;
+  player_name: string;
+  kick_number: number;
+  scored: boolean;
+  created_at: string;
+}
 
+interface ShootoutState {
+  home_score: number;
+  away_score: number;
+  home_taken: number;
+  away_taken: number;
+  next_team_id: number | null;
+
+  // Backend uses these names
+  winner_id: number | null;
+  is_finished: boolean;
+}
 interface Match {
 
   id: number; home_team: Team; away_team: Team; scheduled_at: string;
@@ -52,11 +82,32 @@ interface Match {
   second_half_started_at?: string | null;
   second_half_stoppage_minutes?: number;
   second_half_pause_baseline_seconds?: number;
+  is_knockout: boolean;
+
+  regulation_elapsed_seconds?: number;
+
+  extra_time_first_half_started_at?: string | null;
+  extra_time_first_half_ended_at?: string | null;
+
+  extra_time_second_half_started_at?: string | null;
+  extra_time_second_half_ended_at?: string | null;
+
+  extra_time_first_half_elapsed_seconds?: number;
+  extra_time_elapsed_seconds?: number;
+
+  extra_time_first_half_pause_baseline_seconds?: number;
+  extra_time_second_half_pause_baseline_seconds?: number;
+
+  extra_time_first_half_stoppage_minutes?: number;
+  extra_time_second_half_stoppage_minutes?: number;
+
+  shootout?: ShootoutState | null;
+  shootout_kicks?: ShootoutKick[];
 }
 
 interface MatchEvent {
 
-  id: number; team: number | Team | null;  type: string; player_name: string;
+  id: number; team: number | Team | null; type: string; player_name: string;
 
   minute: number; points: number; note: string; created_at: string;
 
@@ -121,7 +172,27 @@ interface SocketUpdate {
 
 
   match_event?: SocketMatchEvent;
+  is_knockout?: boolean;
 
+  regulation_elapsed_seconds?: number;
+
+  extra_time_first_half_started_at?: string | null;
+  extra_time_first_half_ended_at?: string | null;
+
+  extra_time_second_half_started_at?: string | null;
+  extra_time_second_half_ended_at?: string | null;
+
+  extra_time_first_half_elapsed_seconds?: number;
+  extra_time_elapsed_seconds?: number;
+
+  extra_time_first_half_pause_baseline_seconds?: number;
+  extra_time_second_half_pause_baseline_seconds?: number;
+
+  extra_time_first_half_stoppage_minutes?: number;
+  extra_time_second_half_stoppage_minutes?: number;
+
+  shootout?: ShootoutState | null;
+  shootout_kicks?: ShootoutKick[];
 }
 
 
@@ -319,9 +390,7 @@ function Status({
 
     <span
 
-      className={`inline-flex items-center gap-2 rounded-md border px-3 py-1.5 text-[10px] font-extrabold uppercase tracking-[.16em] ${
-
-        paused
+      className={`inline-flex items-center gap-2 rounded-md border px-3 py-1.5 text-[10px] font-extrabold uppercase tracking-[.16em] ${paused
 
           ? "border-[#F5C66C]/50 bg-[#F5C66C]/15 text-[#F5C66C]"
 
@@ -335,7 +404,7 @@ function Status({
 
               : "border-[#F5C66C]/35 bg-[#F5C66C]/10 text-[#F5C66C]"
 
-      }`}
+        }`}
 
     >
 
@@ -343,15 +412,13 @@ function Status({
 
         <span
 
-          className={`h-1.5 w-1.5 rounded-full ${
-
-            paused
+          className={`h-1.5 w-1.5 rounded-full ${paused
 
               ? "bg-[#F5C66C]"
 
               : "animate-pulse bg-[#EF6672]"
 
-          }`}
+            }`}
 
         />
 
@@ -432,37 +499,168 @@ export default function MatchPage() {
   // Phase-aware clock: use real timestamps for active play, freeze at HT/FT.
   // The optional fields also keep older API responses from crashing the page.
   const elapsedSeconds = useMemo(() => {
-    if (!match?.started_at || match.status === "scheduled") return 0;
-    const phase = match.phase ?? (match.status === "finished" ? "full_time" : "first_half");
-    if (phase === "half_time") return match.first_half_elapsed_seconds ?? match.clock_seconds ?? 2700;
+    if (!match?.started_at || match.status === "scheduled") {
+      return 0;
+    }
 
-    const secondHalf = phase === "second_half" || phase === "regulation_ended" ||
-      (phase === "full_time" && !!match.second_half_started_at);
-    const anchor = secondHalf ? match.second_half_started_at : match.started_at;
-    if (!anchor) return match.clock_seconds ?? (secondHalf ? 2700 : 0);
-    const started = new Date(anchor).getTime();
-    const stopped = match.status === "finished" || phase === "full_time"
-      ? match.ended_at
-      : phase === "regulation_ended"
-        ? null
-        : match.is_paused ? match.paused_at : null;
-    // Regulation-ended is a non-playing phase; rely on the server snapshot.
-    if (phase === "regulation_ended") return match.clock_seconds ?? 5400;
-    const reference = stopped ? new Date(stopped).getTime() : clockNow;
-    if (!Number.isFinite(started) || !Number.isFinite(reference)) return match.clock_seconds ?? 0;
-    const pauseTotal = secondHalf
-      ? Math.max(0, match.total_paused_seconds - (match.second_half_pause_baseline_seconds ?? 0))
-      : match.total_paused_seconds;
-    return (secondHalf ? 2700 : 0) + Math.max(0, Math.floor((reference - started) / 1000) - pauseTotal);
+    // Finished match: backend owns the final frozen clock.
+    if (
+      match.status === "finished" ||
+      match.phase === "full_time"
+    ) {
+      return match.clock_seconds ?? 0;
+    }
+
+    // Half-time: freeze at first-half snapshot.
+    // if (match.phase === "half_time") {
+    //   return (
+    //     match.first_half_elapsed_seconds ??
+    //     match.clock_seconds ??
+    //     45 * 60
+    //   );
+    // }
+    if (match.phase === "half_time") {
+      return Math.max(
+        match.first_half_elapsed_seconds ?? 0,
+        match.clock_seconds ?? 0,
+        45 * 60
+      );
+    }
+
+    // Regulation has ended: freeze server snapshot.
+    // if (match.phase === "regulation_ended") {
+    //   return (
+    //     match.regulation_elapsed_seconds ??
+    //     match.clock_seconds ??
+    //     90 * 60
+    //   );
+    // }
+    if (match.phase === "regulation_ended") {
+      return Math.max(
+        match.regulation_elapsed_seconds ?? 0,
+        match.clock_seconds ?? 0,
+        90 * 60
+      );
+    }
+
+    // Interval between ET halves.
+    // if (match.phase === "extra_time_interval") {
+    //   return (
+    //     match.extra_time_first_half_elapsed_seconds ??
+    //     match.clock_seconds ??
+    //     105 * 60
+    //   );
+    // }
+    if (match.phase === "extra_time_interval") {
+      return Math.max(
+        90 * 60 +
+        (match.extra_time_first_half_elapsed_seconds ?? 0),
+        105 * 60
+      );
+    }
+    // Penalty shootout has no running match clock.
+    if (match.phase === "penalty_shootout") {
+      return Math.max(
+        match.extra_time_elapsed_seconds ?? 0,
+        match.clock_seconds ?? 0,
+        120 * 60
+      );
+    }
+
+    let anchor: string | null = null;
+    let baseSeconds = 0;
+    let pauseBaseline = 0;
+
+    switch (match.phase) {
+      case "first_half":
+        anchor = match.started_at;
+        baseSeconds = 0;
+        pauseBaseline = 0;
+        break;
+
+      case "second_half":
+        anchor = match.second_half_started_at ?? null;
+        baseSeconds = 45 * 60;
+        pauseBaseline =
+          match.second_half_pause_baseline_seconds ?? 0;
+        break;
+
+      case "extra_time_first_half":
+        anchor =
+          match.extra_time_first_half_started_at ?? null;
+        baseSeconds = 90 * 60;
+        pauseBaseline =
+          match.extra_time_first_half_pause_baseline_seconds ?? 0;
+        break;
+
+      case "extra_time_second_half":
+        anchor =
+          match.extra_time_second_half_started_at ?? null;
+        baseSeconds = 105 * 60;
+        pauseBaseline =
+          match.extra_time_second_half_pause_baseline_seconds ?? 0;
+        break;
+
+      default:
+        return match.clock_seconds ?? 0;
+    }
+
+    if (!anchor) {
+      return match.clock_seconds ?? baseSeconds;
+    }
+
+    const startedAt = new Date(anchor).getTime();
+
+    if (!Number.isFinite(startedAt)) {
+      return match.clock_seconds ?? baseSeconds;
+    }
+
+    const referenceAt =
+      match.is_paused && match.paused_at
+        ? new Date(match.paused_at).getTime()
+        : clockNow;
+
+    if (!Number.isFinite(referenceAt)) {
+      return match.clock_seconds ?? baseSeconds;
+    }
+
+    const phasePausedSeconds = Math.max(
+      0,
+      match.total_paused_seconds - pauseBaseline
+    );
+
+    return (
+      baseSeconds +
+      Math.max(
+        0,
+        Math.floor((referenceAt - startedAt) / 1000) -
+        phasePausedSeconds
+      )
+    );
   }, [match, clockNow]);
 
-  const phaseLabel = match?.status === "finished" ? "FULL TIME" :
-    match?.phase === "first_half" ? "FIRST HALF" :
-    match?.phase === "half_time" ? "HALF TIME" :
-    match?.phase === "second_half" ? "SECOND HALF" :
-    match?.phase === "regulation_ended" ? "REGULATION ENDED" :
-    match?.phase === "full_time" ? "FULL TIME" : "AWAITING KICKOFF";
-
+  const phaseLabel =
+    match?.status === "finished"
+      ? "FULL TIME"
+      : match?.phase === "first_half"
+        ? "FIRST HALF"
+        : match?.phase === "half_time"
+          ? "HALF TIME"
+          : match?.phase === "second_half"
+            ? "SECOND HALF"
+            : match?.phase === "regulation_ended"
+              ? "REGULATION ENDED"
+              : match?.phase === "extra_time_first_half"
+                ? "EXTRA TIME · FIRST HALF"
+                : match?.phase === "extra_time_interval"
+                  ? "EXTRA TIME · HALF TIME"
+                  : match?.phase === "extra_time_second_half"
+                    ? "EXTRA TIME · SECOND HALF"
+                    : match?.phase === "penalty_shootout"
+                      ? "PENALTY SHOOTOUT"
+                      : match?.phase === "full_time"
+                        ? "FULL TIME"
+                        : "AWAITING KICKOFF";
   const activeStoppage = match?.phase === "first_half"
     ? (match.first_half_stoppage_minutes ?? match.extra_time_minutes)
     : match?.phase === "second_half"
@@ -655,103 +853,164 @@ export default function MatchPage() {
 
 
 
-            setMatch((current) =>
+          setMatch((current) =>
 
-              current
+            current
 
-                ? {
+              ? {
 
-                    ...current,
-
-
-
-                    status:
-
-                      data.status ?? current.status,
+                ...current,
 
 
 
-                    home_score:
+                status:
 
-                      data.home_score ??
-
-                      current.home_score,
+                  data.status ?? current.status,
 
 
 
-                    away_score:
+                home_score:
 
-                      data.away_score ??
+                  data.home_score ??
 
-                      current.away_score,
-
-
-
-                    started_at:
-
-                      data.started_at !== undefined
-
-                        ? data.started_at
-
-                        : current.started_at,
+                  current.home_score,
 
 
 
-                    ended_at:
+                away_score:
 
-                      data.ended_at !== undefined
+                  data.away_score ??
 
-                        ? data.ended_at
-
-                        : current.ended_at,
+                  current.away_score,
 
 
 
-                    is_paused:
+                started_at:
 
-                      data.is_paused ??
+                  data.started_at !== undefined
 
-                      current.is_paused,
+                    ? data.started_at
 
-
-
-                    paused_at:
-
-                      data.paused_at !== undefined
-
-                        ? data.paused_at
-
-                        : current.paused_at,
+                    : current.started_at,
 
 
 
-                    total_paused_seconds:
+                ended_at:
 
-                      data.total_paused_seconds ??
+                  data.ended_at !== undefined
 
-                      current.total_paused_seconds,
+                    ? data.ended_at
+
+                    : current.ended_at,
 
 
 
-                    extra_time_minutes:
+                is_paused:
 
-                      data.extra_time_minutes ??
+                  data.is_paused ??
 
-                      current.extra_time_minutes,
-                      phase: data.phase ?? current.phase,
-                      clock_seconds: data.clock_seconds ?? current.clock_seconds,
-                      first_half_elapsed_seconds: data.first_half_elapsed_seconds ?? current.first_half_elapsed_seconds,
-                      first_half_stoppage_minutes: data.first_half_stoppage_minutes ?? current.first_half_stoppage_minutes,
-                      first_half_ended_at: data.first_half_ended_at !== undefined ? data.first_half_ended_at : current.first_half_ended_at,
-                      second_half_started_at: data.second_half_started_at !== undefined ? data.second_half_started_at : current.second_half_started_at,
-                      second_half_stoppage_minutes: data.second_half_stoppage_minutes ?? current.second_half_stoppage_minutes,
-                      second_half_pause_baseline_seconds: data.second_half_pause_baseline_seconds ?? current.second_half_pause_baseline_seconds,
+                  current.is_paused,
 
-                  }
 
-                : current
 
-            );
+                paused_at:
+
+                  data.paused_at !== undefined
+
+                    ? data.paused_at
+
+                    : current.paused_at,
+
+
+
+                total_paused_seconds:
+
+                  data.total_paused_seconds ??
+
+                  current.total_paused_seconds,
+
+
+
+                extra_time_minutes:
+
+                  data.extra_time_minutes ??
+
+                  current.extra_time_minutes,
+                phase: data.phase ?? current.phase,
+                clock_seconds: data.clock_seconds ?? current.clock_seconds,
+                first_half_elapsed_seconds: data.first_half_elapsed_seconds ?? current.first_half_elapsed_seconds,
+                first_half_stoppage_minutes: data.first_half_stoppage_minutes ?? current.first_half_stoppage_minutes,
+                first_half_ended_at: data.first_half_ended_at !== undefined ? data.first_half_ended_at : current.first_half_ended_at,
+                second_half_started_at: data.second_half_started_at !== undefined ? data.second_half_started_at : current.second_half_started_at,
+                second_half_stoppage_minutes: data.second_half_stoppage_minutes ?? current.second_half_stoppage_minutes,
+                second_half_pause_baseline_seconds: data.second_half_pause_baseline_seconds ?? current.second_half_pause_baseline_seconds,
+                is_knockout:
+                  data.is_knockout ??
+                  current.is_knockout,
+
+                regulation_elapsed_seconds:
+                  data.regulation_elapsed_seconds ??
+                  current.regulation_elapsed_seconds,
+
+                extra_time_first_half_started_at:
+                  data.extra_time_first_half_started_at !== undefined
+                    ? data.extra_time_first_half_started_at
+                    : current.extra_time_first_half_started_at,
+
+                extra_time_first_half_ended_at:
+                  data.extra_time_first_half_ended_at !== undefined
+                    ? data.extra_time_first_half_ended_at
+                    : current.extra_time_first_half_ended_at,
+
+                extra_time_second_half_started_at:
+                  data.extra_time_second_half_started_at !== undefined
+                    ? data.extra_time_second_half_started_at
+                    : current.extra_time_second_half_started_at,
+
+                extra_time_second_half_ended_at:
+                  data.extra_time_second_half_ended_at !== undefined
+                    ? data.extra_time_second_half_ended_at
+                    : current.extra_time_second_half_ended_at,
+
+                extra_time_first_half_elapsed_seconds:
+                  data.extra_time_first_half_elapsed_seconds ??
+                  current.extra_time_first_half_elapsed_seconds,
+
+                extra_time_elapsed_seconds:
+                  data.extra_time_elapsed_seconds ??
+                  current.extra_time_elapsed_seconds,
+
+                extra_time_first_half_pause_baseline_seconds:
+                  data.extra_time_first_half_pause_baseline_seconds ??
+                  current.extra_time_first_half_pause_baseline_seconds,
+
+                extra_time_second_half_pause_baseline_seconds:
+                  data.extra_time_second_half_pause_baseline_seconds ??
+                  current.extra_time_second_half_pause_baseline_seconds,
+
+                extra_time_first_half_stoppage_minutes:
+                  data.extra_time_first_half_stoppage_minutes ??
+                  current.extra_time_first_half_stoppage_minutes,
+
+                extra_time_second_half_stoppage_minutes:
+                  data.extra_time_second_half_stoppage_minutes ??
+                  current.extra_time_second_half_stoppage_minutes,
+
+                shootout:
+                  data.shootout !== undefined
+                    ? data.shootout
+                    : current.shootout,
+
+                shootout_kicks:
+                  data.shootout_kicks !== undefined
+                    ? data.shootout_kicks
+                    : current.shootout_kicks,
+
+              }
+
+              : current
+
+          );
 
 
 
@@ -866,6 +1125,26 @@ export default function MatchPage() {
   const away = match.away_team;
 
   const played = match.status !== "scheduled";
+  const shootoutHomeScore = match.shootout?.home_score ?? 0;
+  const shootoutAwayScore = match.shootout?.away_score ?? 0;
+
+  const shootoutFinished =
+    match.shootout?.is_finished ?? false;
+
+  const shootoutWinnerId =
+    match.shootout?.winner_id ?? null;
+
+  const shootoutWinnerName =
+    shootoutWinnerId === home.id
+      ? home.name
+      : shootoutWinnerId === away.id
+        ? away.name
+        : null;
+
+  const hasShootoutResult =
+    match.is_knockout &&
+    shootoutFinished &&
+    shootoutWinnerId !== null;
 
 
 
@@ -899,108 +1178,106 @@ export default function MatchPage() {
 
 
 
-<div className="mt-5">
+          <div className="mt-5">
 
-  <Status
+            <Status
 
-    status={match.status}
+              status={match.status}
 
-    isPaused={match.is_paused}
+              isPaused={match.is_paused}
 
-  />
+            />
 
-</div>
-
-
-
-{/* PUBLIC LIVE MATCH CLOCK */}
+          </div>
 
 
 
-{match.status !== "scheduled" && (
-
-  <div className="mt-6 flex flex-col items-center gap-3">
+          {/* PUBLIC LIVE MATCH CLOCK */}
 
 
 
-    <div
+          {match.status !== "scheduled" && (
 
-      className={`flex items-center gap-3 rounded-xl border px-6 py-3 ${
-
-        match.is_paused
-
-          ? "border-[#F5C66C]/45 bg-[#F5C66C]/10"
-
-          : "border-white/15 bg-[#151D26]/80"
-
-      }`}
-
-    >
-
-      <Clock3
-
-        size={19}
-
-        className="text-[#F5C66C]"
-
-      />
+            <div className="mt-6 flex flex-col items-center gap-3">
 
 
 
-      <span className="font-mono text-3xl font-extrabold tabular-nums tracking-[-.06em] text-white">
+              <div
 
-        {clockDisplay}
+                className={`flex items-center gap-3 rounded-xl border px-6 py-3 ${match.is_paused
 
-      </span>
+                    ? "border-[#F5C66C]/45 bg-[#F5C66C]/10"
 
+                    : "border-white/15 bg-[#151D26]/80"
 
+                  }`}
 
-      {activeStoppage > 0 && (
+              >
 
-        <span className="border-l border-white/20 pl-3 font-mono text-lg font-bold text-[#F5C66C]">
+                <Clock3
 
-          +{activeStoppage}&apos;
+                  size={19}
 
-        </span>
+                  className="text-[#F5C66C]"
 
-      )}
-
-    </div>
-
-
-
-    <p className="text-[10px] font-extrabold uppercase tracking-[.2em] text-[#F5C66C]">{phaseLabel}</p>
-
-    {match.phase === "half_time" && (
-      <p className="text-[10px] font-extrabold uppercase tracking-[.2em] text-[#F5C66C]">Half-time break — clock stopped</p>
-    )}
-    {match.is_paused && (
-
-      <p className="text-[10px] font-extrabold uppercase tracking-[.2em] text-[#F5C66C]">
-
-        Match temporarily suspended
-
-      </p>
-
-    )}
+                />
 
 
 
-    {match.status === "finished" && (
+                <span className="font-mono text-3xl font-extrabold tabular-nums tracking-[-.06em] text-white">
 
-      <p className="text-[10px] font-extrabold uppercase tracking-[.2em] text-[#A8B5C0]">
+                  {clockDisplay}
 
-        Final match duration
-
-      </p>
-
-    )}
+                </span>
 
 
 
-  </div>
+                {activeStoppage > 0 && (
 
-)}
+                  <span className="border-l border-white/20 pl-3 font-mono text-lg font-bold text-[#F5C66C]">
+
+                    +{activeStoppage}&apos;
+
+                  </span>
+
+                )}
+
+              </div>
+
+
+
+              <p className="text-[10px] font-extrabold uppercase tracking-[.2em] text-[#F5C66C]">{phaseLabel}</p>
+
+              {match.phase === "half_time" && (
+                <p className="text-[10px] font-extrabold uppercase tracking-[.2em] text-[#F5C66C]">Half-time break — clock stopped</p>
+              )}
+              {match.is_paused && (
+
+                <p className="text-[10px] font-extrabold uppercase tracking-[.2em] text-[#F5C66C]">
+
+                  Match temporarily suspended
+
+                </p>
+
+              )}
+
+
+
+              {match.status === "finished" && (
+
+                <p className="text-[10px] font-extrabold uppercase tracking-[.2em] text-[#A8B5C0]">
+
+                  Final match duration
+
+                </p>
+
+              )}
+
+
+
+            </div>
+
+          )}
 
 
 
@@ -1042,13 +1319,13 @@ export default function MatchPage() {
 
                 className={`mt-5 text-[10px] font-extrabold uppercase tracking-[.23em] ${match.is_paused
 
-                    ? "text-[#F5C66C]"
+                  ? "text-[#F5C66C]"
 
-                    : match.status === "live"
+                  : match.status === "live"
 
-                      ? "text-[#FF8E97]"
+                    ? "text-[#FF8E97]"
 
-                      : "text-[#E3C18A]"
+                    : "text-[#E3C18A]"
 
                   }`}
 
@@ -1069,6 +1346,25 @@ export default function MatchPage() {
                       : "VS"}
 
               </p>
+              {hasShootoutResult && (
+                <div className="mt-5">
+                  <p className="text-[10px] font-extrabold uppercase tracking-[.22em] text-[#F5C66C]">
+                    Penalties
+                  </p>
+
+                  <p className="mt-2 font-mono text-3xl font-extrabold text-white">
+                    {shootoutHomeScore}
+                    <span className="mx-3 text-[#A98E60]">:</span>
+                    {shootoutAwayScore}
+                  </p>
+
+                  {shootoutWinnerName && (
+                    <p className="mt-3 text-[11px] font-extrabold uppercase tracking-[.16em] text-[#F5C66C]">
+                      {shootoutWinnerName} wins on penalties
+                    </p>
+                  )}
+                </div>
+              )}
 
             </div>
 
@@ -1222,15 +1518,15 @@ export default function MatchPage() {
 
 
 
-            const isHome = teamId === home.id;
+              const isHome = teamId === home.id;
 
-            const team = isHome ? home : teamId === away.id ? away : null;
+              const team = isHome ? home : teamId === away.id ? away : null;
 
-            const isGoal = event.type === "goal";
+              const isGoal = event.type === "goal";
 
-            return <div key={event.id} className="relative grid grid-cols-[minmax(0,1fr)_48px_minmax(0,1fr)] items-center gap-1 sm:grid-cols-[minmax(0,1fr)_76px_minmax(0,1fr)] sm:gap-3"><div className={isHome ? "flex justify-end" : ""}>{isHome && <div className={`w-full max-w-[340px] border-l-2 p-3 sm:p-4 ${isGoal ? "border-[#F5C66C] bg-[#F5C66C]/[.09]" : "border-[#4B5965] bg-[#202B35]"}`}><div className="flex flex-wrap items-center gap-2"><span className="text-lg">{eventSymbol(event.type)}</span><span className={`text-xs font-extrabold ${isGoal ? "text-[#F5C66C]" : "text-white"}`}>{eventLabel(event.type)}</span></div><p className="mt-1 break-words text-xs font-bold text-[#E3EAF0]">{event.player_name || team?.name || `Team #${teamId}`}</p>{event.player_name && <p className="mt-1 text-[10px] text-[#98A7B3]">{team?.name || `Team #${teamId}`}</p>}{event.note && <p className="mt-2 break-words text-[11px] leading-5 text-[#A9B6C0]">{event.note}</p>}{event.type === "reward" && event.points !== 0 && <p className="mt-2 text-[11px] font-extrabold text-[#F5C66C]">{event.points > 0 ? "+" : ""}{event.points} bonus points</p>}</div>}</div><div className="relative z-10 mx-auto flex h-10 w-10 items-center justify-center rounded-full border border-[#F5C66C]/50 bg-[#242B31] font-mono text-xs font-extrabold text-[#F5C66C] sm:h-12 sm:w-12">{event.minute}'</div><div>{!isHome && <div className={`w-full max-w-[340px] border-r-2 p-3 sm:p-4 ${isGoal ? "border-[#F5C66C] bg-[#F5C66C]/[.09]" : "border-[#4B5965] bg-[#202B35]"}`}><div className="flex flex-wrap items-center gap-2"><span className="text-lg">{eventSymbol(event.type)}</span><span className={`text-xs font-extrabold ${isGoal ? "text-[#F5C66C]" : "text-white"}`}>{eventLabel(event.type)}</span></div><p className="mt-1 break-words text-xs font-bold text-[#E3EAF0]">{event.player_name || team?.name || `Team #${teamId}`}</p>{event.player_name && <p className="mt-1 text-[10px] text-[#98A7B3]">{team?.name || `Team #${teamId}`}</p>}{event.note && <p className="mt-2 break-words text-[11px] leading-5 text-[#A9B6C0]">{event.note}</p>}{event.type === "reward" && event.points !== 0 && <p className="mt-2 text-[11px] font-extrabold text-[#F5C66C]">{event.points > 0 ? "+" : ""}{event.points} bonus points</p>}</div>}</div></div>;
+              return <div key={event.id} className="relative grid grid-cols-[minmax(0,1fr)_48px_minmax(0,1fr)] items-center gap-1 sm:grid-cols-[minmax(0,1fr)_76px_minmax(0,1fr)] sm:gap-3"><div className={isHome ? "flex justify-end" : ""}>{isHome && <div className={`w-full max-w-[340px] border-l-2 p-3 sm:p-4 ${isGoal ? "border-[#F5C66C] bg-[#F5C66C]/[.09]" : "border-[#4B5965] bg-[#202B35]"}`}><div className="flex flex-wrap items-center gap-2"><span className="text-lg">{eventSymbol(event.type)}</span><span className={`text-xs font-extrabold ${isGoal ? "text-[#F5C66C]" : "text-white"}`}>{eventLabel(event.type)}</span></div><p className="mt-1 break-words text-xs font-bold text-[#E3EAF0]">{event.player_name || team?.name || `Team #${teamId}`}</p>{event.player_name && <p className="mt-1 text-[10px] text-[#98A7B3]">{team?.name || `Team #${teamId}`}</p>}{event.note && <p className="mt-2 break-words text-[11px] leading-5 text-[#A9B6C0]">{event.note}</p>}{event.type === "reward" && event.points !== 0 && <p className="mt-2 text-[11px] font-extrabold text-[#F5C66C]">{event.points > 0 ? "+" : ""}{event.points} bonus points</p>}</div>}</div><div className="relative z-10 mx-auto flex h-10 w-10 items-center justify-center rounded-full border border-[#F5C66C]/50 bg-[#242B31] font-mono text-xs font-extrabold text-[#F5C66C] sm:h-12 sm:w-12">{event.minute}'</div><div>{!isHome && <div className={`w-full max-w-[340px] border-r-2 p-3 sm:p-4 ${isGoal ? "border-[#F5C66C] bg-[#F5C66C]/[.09]" : "border-[#4B5965] bg-[#202B35]"}`}><div className="flex flex-wrap items-center gap-2"><span className="text-lg">{eventSymbol(event.type)}</span><span className={`text-xs font-extrabold ${isGoal ? "text-[#F5C66C]" : "text-white"}`}>{eventLabel(event.type)}</span></div><p className="mt-1 break-words text-xs font-bold text-[#E3EAF0]">{event.player_name || team?.name || `Team #${teamId}`}</p>{event.player_name && <p className="mt-1 text-[10px] text-[#98A7B3]">{team?.name || `Team #${teamId}`}</p>}{event.note && <p className="mt-2 break-words text-[11px] leading-5 text-[#A9B6C0]">{event.note}</p>}{event.type === "reward" && event.points !== 0 && <p className="mt-2 text-[11px] font-extrabold text-[#F5C66C]">{event.points > 0 ? "+" : ""}{event.points} bonus points</p>}</div>}</div></div>;
 
-          })}</div></div>}
+            })}</div></div>}
 
           <div className="flex items-center justify-center gap-2 border-t border-[#303C47] bg-[#17212A] px-5 py-4 text-[10px] font-bold uppercase tracking-[.15em] text-[#8D9CA9]"><Flag size={13} className="text-[#F5C66C]" /> End of recorded commentary</div>
 

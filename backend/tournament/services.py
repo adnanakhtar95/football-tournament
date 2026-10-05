@@ -4,44 +4,73 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.utils import timezone
 
-from .models import Event, EventTeam, Match, MatchEvent, Player, Team
+from .models import Event, EventTeam, Match, MatchEvent,PenaltyShootoutKick, Player, Team
+
 
 
 
 def broadcast_match_update(match, event_type, event=None):
+    """
+    Broadcast match updates to:
+
+    1. Individual match spectators
+    2. Global live scoreboard
+
+    Supports:
+    - Normal football matches
+    - Knockout matches
+    - Extra time (90–120 minutes)
+    - Penalty shootouts
+    """
+
     channel_layer = get_channel_layer()
 
-    # data = {
-    #     "type": "match_update",
-    #     "event": event_type,
-    #     "match_id": match.id,
-    #     "status": match.status,
-    #     "home_score": match.home_score,
-    #     "away_score": match.away_score,
-    # }
-    
+    # -----------------------------------------
+    # BASE MATCH DATA
+    # -----------------------------------------
+
     data = {
         "type": "match_update",
         "event": event_type,
         "match_id": match.id,
+
         "status": match.status,
+        "phase": match.phase,
+
         "home_score": match.home_score,
         "away_score": match.away_score,
 
-        # Advanced match controls
+        # Knockout identification
+        "is_knockout": match.is_knockout,
+
+        # -------------------------------------
+        # AUTHORITATIVE FOOTBALL CLOCK
+        # -------------------------------------
+
+        "clock_seconds": get_match_clock_seconds(match),
+
+        "regulation_elapsed_seconds": (
+            match.regulation_elapsed_seconds
+        ),
+
+        # -------------------------------------
+        # EXISTING ADVANCED MATCH CONTROLS
+        # -------------------------------------
+
         "is_paused": match.is_paused,
+
         "paused_at": (
             match.paused_at.isoformat()
             if match.paused_at
             else None
         ),
-        "total_paused_seconds": match.total_paused_seconds,
+
+        "total_paused_seconds": (
+            match.total_paused_seconds
+        ),
+
+        # Existing stoppage-time functionality
         "extra_time_minutes": match.extra_time_minutes,
-
-        # Football match lifecycle
-        "phase": match.phase,
-
-        "clock_seconds": get_match_clock_seconds(match),
 
         "first_half_stoppage_minutes": (
             match.first_half_stoppage_minutes
@@ -50,6 +79,10 @@ def broadcast_match_update(match, event_type, event=None):
         "second_half_stoppage_minutes": (
             match.second_half_stoppage_minutes
         ),
+
+        # -------------------------------------
+        # NORMAL FOOTBALL LIFECYCLE
+        # -------------------------------------
 
         "first_half_elapsed_seconds": (
             match.first_half_elapsed_seconds
@@ -61,23 +94,64 @@ def broadcast_match_update(match, event_type, event=None):
             else None
         ),
 
+        "second_half_started_at": (
+            match.second_half_started_at.isoformat()
+            if match.second_half_started_at
+            else None
+        ),
 
-      "second_half_started_at": (
-    match.second_half_started_at.isoformat()
-    if match.second_half_started_at
-    else None
-),
+        "second_half_pause_baseline_seconds": (
+            match.second_half_pause_baseline_seconds
+        ),
 
-# Needed by the frontend to calculate second-half pause duration
-"second_half_pause_baseline_seconds": (
-    match.second_half_pause_baseline_seconds
-),
+        # -------------------------------------
+        # KNOCKOUT EXTRA-TIME LIFECYCLE
+        # -------------------------------------
 
-"started_at": (
-    match.started_at.isoformat()
-    if match.started_at
-    else None
-),
+        "extra_time_first_half_started_at": (
+            match.extra_time_first_half_started_at.isoformat()
+            if match.extra_time_first_half_started_at
+            else None
+        ),
+
+        "extra_time_first_half_elapsed_seconds": (
+            match.extra_time_first_half_elapsed_seconds
+        ),
+
+        "extra_time_first_half_ended_at": (
+            match.extra_time_first_half_ended_at.isoformat()
+            if match.extra_time_first_half_ended_at
+            else None
+        ),
+
+        "extra_time_pause_baseline_seconds": (
+            match.extra_time_pause_baseline_seconds
+        ),
+
+        "extra_time_second_half_started_at": (
+            match.extra_time_second_half_started_at.isoformat()
+            if match.extra_time_second_half_started_at
+            else None
+        ),
+
+        "extra_time_second_half_pause_baseline_seconds": (
+            match.extra_time_second_half_pause_baseline_seconds
+        ),
+
+        "extra_time_elapsed_seconds": (
+            match.extra_time_elapsed_seconds
+        ),
+
+       
+        # MATCH TIMESTAMPS
+        
+
+        "started_at": (
+            match.started_at.isoformat()
+            if match.started_at
+            else None
+        ),
+
         "ended_at": (
             match.ended_at.isoformat()
             if match.ended_at
@@ -85,20 +159,72 @@ def broadcast_match_update(match, event_type, event=None):
         ),
     }
 
+    # =========================================
+    # PENALTY SHOOTOUT INFORMATION
+    # =========================================
+
+    if match.is_knockout:
+
+        # Calculate the current shootout score,
+        # winner and next shooting team.
+        shootout_state = get_shootout_state(match)
+
+        data["shootout"] = shootout_state
+
+        # Include individual penalty attempts.
+        kicks = (
+            PenaltyShootoutKick.objects
+            .filter(match=match)
+            .order_by("created_at", "id")
+        )
+
+        data["shootout_kicks"] = [
+            {
+                "id": kick.id,
+                "team_id": kick.team_id,
+                "player_id": kick.player_id,
+                "player_name": kick.player_name,
+                "kick_number": kick.kick_number,
+                "scored": kick.scored,
+                "created_at": kick.created_at.isoformat(),
+            }
+            for kick in kicks
+        ]
+
+    else:
+
+        # Consistent payload for normal matches.
+        data["shootout"] = None
+        data["shootout_kicks"] = []
+
+    # =========================================
+    # OPTIONAL MATCH COMMENTARY EVENT
+    # =========================================
 
     if event is not None:
+
         data["match_event"] = {
             "id": event.id,
             "type": event.type,
             "team_id": event.team_id,
-            "player_id": event.player_id,           
+            "player_id": event.player_id,
             "player_name": event.player_name,
             "minute": event.minute,
             "points": event.points,
             "note": event.note,
         }
 
-    # 1. Broadcast to spectators watching this specific match.
+    # =========================================
+    # CHANNEL LAYER SAFETY
+    # =========================================
+
+    if channel_layer is None:
+        return
+
+    
+    # 1. INDIVIDUAL MATCH BROADCAST
+   
+
     async_to_sync(channel_layer.group_send)(
         f"match_{match.id}",
         {
@@ -107,7 +233,10 @@ def broadcast_match_update(match, event_type, event=None):
         },
     )
 
-    # 2. Broadcast to everyone watching the global live scoreboard.
+    # =========================================
+    # 2. GLOBAL LIVE SCOREBOARD BROADCAST
+    # =========================================
+
     async_to_sync(channel_layer.group_send)(
         "live_scoreboard",
         {
@@ -119,11 +248,21 @@ def broadcast_match_update(match, event_type, event=None):
 
 def get_match_clock_seconds(match, at_time=None):
     """
-    Return football playing time in seconds.
+    Return the football playing clock in seconds.
 
-    Half-time and temporary match suspensions
-    are excluded from the playing clock.
+    Regulation:
+        First half: 0:00 onwards
+        Half-time: frozen
+        Second half: 45:00 onwards
+        Regulation ended: frozen
+
+    Knockout:
+        ET first half: 90:00 onwards
+        ET interval: frozen
+        ET second half: 105:00 onwards
+        Penalty shootout: frozen
     """
+
     now = at_time or timezone.now()
 
     if (
@@ -132,11 +271,13 @@ def get_match_clock_seconds(match, at_time=None):
     ):
         return 0
 
-    if match.phase == Match.Phase.HALF_TIME:
-        return match.first_half_elapsed_seconds
-
     if match.phase == Match.Phase.FULL_TIME:
-      return get_finished_clock_seconds(match)
+        return get_finished_clock_seconds(match)
+
+    
+    # REGULATION FIRST HALF
+ 
+
     if match.phase == Match.Phase.FIRST_HALF:
         reference_time = (
             match.paused_at
@@ -144,19 +285,27 @@ def get_match_clock_seconds(match, at_time=None):
             else now
         )
 
-        elapsed = (
-            reference_time - match.started_at
-        ).total_seconds()
+        elapsed = int(
+            (reference_time - match.started_at).total_seconds()
+        )
 
         return max(
             0,
-            int(elapsed) - match.total_paused_seconds,
+            elapsed - match.total_paused_seconds
         )
 
-    if match.phase in (
-        Match.Phase.SECOND_HALF,
-        Match.Phase.REGULATION_ENDED,
-    ):
+   
+    # REGULATION HALF-TIME
+   
+
+    if match.phase == Match.Phase.HALF_TIME:
+        return match.first_half_elapsed_seconds
+
+    
+    # REGULATION SECOND HALF
+   
+
+    if match.phase == Match.Phase.SECOND_HALF:
         if not match.second_half_started_at:
             return 45 * 60
 
@@ -166,51 +315,180 @@ def get_match_clock_seconds(match, at_time=None):
             else now
         )
 
-        elapsed = (
-            reference_time - match.second_half_started_at
-        ).total_seconds()
+        elapsed = int(
+            (
+                reference_time - match.second_half_started_at
+            ).total_seconds()
+        )
 
-        second_half_pauses = max(
+        paused_seconds = max(
             0,
             match.total_paused_seconds
-            - match.second_half_pause_baseline_seconds,
+            - match.second_half_pause_baseline_seconds
         )
 
         return (45 * 60) + max(
             0,
-            int(elapsed) - second_half_pauses,
+            elapsed - paused_seconds
         )
+
+   
+    # REGULATION ENDED
+    
+
+    if match.phase == Match.Phase.REGULATION_ENDED:
+        return match.regulation_elapsed_seconds
+
+
+    # EXTRA TIME - FIRST HALF
+   
+
+    if match.phase == Match.Phase.EXTRA_TIME_FIRST_HALF:
+        if not match.extra_time_first_half_started_at:
+            return 90 * 60
+
+        reference_time = (
+            match.paused_at
+            if match.is_paused and match.paused_at
+            else now
+        )
+
+        elapsed = int(
+            (
+                reference_time
+                - match.extra_time_first_half_started_at
+            ).total_seconds()
+        )
+
+        paused_seconds = max(
+            0,
+            match.total_paused_seconds
+            - match.extra_time_pause_baseline_seconds
+        )
+
+        return (90 * 60) + max(
+            0,
+            elapsed - paused_seconds
+        )
+
+    
+    # EXTRA TIME INTERVAL
+    
+
+    if match.phase == Match.Phase.EXTRA_TIME_INTERVAL:
+        return (
+            (90 * 60)
+            + match.extra_time_first_half_elapsed_seconds
+        )
+
+    
+    # EXTRA TIME - SECOND HALF
+   
+
+    if match.phase == Match.Phase.EXTRA_TIME_SECOND_HALF:
+        if not match.extra_time_second_half_started_at:
+            return 105 * 60
+
+        reference_time = (
+            match.paused_at
+            if match.is_paused and match.paused_at
+            else now
+        )
+
+        elapsed = int(
+            (
+                reference_time
+                - match.extra_time_second_half_started_at
+            ).total_seconds()
+        )
+
+        paused_seconds = max(
+            0,
+            match.total_paused_seconds
+            - match.extra_time_second_half_pause_baseline_seconds
+        )
+
+        return (105 * 60) + max(
+            0,
+            elapsed - paused_seconds
+        )
+
+    
+    # PENALTY SHOOTOUT
+    
+
+    if match.phase == Match.Phase.PENALTY_SHOOTOUT:
+        return match.extra_time_elapsed_seconds
 
     return 0
 
 
 def get_finished_clock_seconds(match):
     """
-    Calculate the frozen clock after the final whistle.
+    Return the authoritative frozen clock after the final whistle.
+
+    Normal/group-stage:
+        Uses the regulation snapshot saved by finish_match().
+        Minimum official full-time clock is 90:00.
+
+    Knockout:
+        Regulation finish uses regulation snapshot.
+        Extra-time / penalties use extra-time snapshot.
     """
+
     if not match.ended_at:
         return 0
 
-    if not match.second_half_started_at:
-        return match.first_half_elapsed_seconds
+    
+    # MATCH COMPLETED AFTER EXTRA TIME
+    
+    if match.extra_time_second_half_started_at:
 
-    elapsed = (
-        match.ended_at - match.second_half_started_at
-    ).total_seconds()
+        if match.extra_time_elapsed_seconds > 0:
+            return max(
+                match.extra_time_elapsed_seconds,
+                120 * 60,
+            )
 
-    second_half_pauses = max(
-        0,
-        match.total_paused_seconds
-        - match.second_half_pause_baseline_seconds,
+        # Safety fallback if an ET snapshot was not saved.
+        elapsed = int(
+            (
+                match.ended_at
+                - match.extra_time_second_half_started_at
+            ).total_seconds()
+        )
+
+        paused_seconds = max(
+            0,
+            match.total_paused_seconds
+            - match.extra_time_second_half_pause_baseline_seconds
+        )
+
+        return max(
+            (105 * 60) + max(
+                0,
+                elapsed - paused_seconds
+            ),
+            120 * 60,
+        )
+
+    
+    # KNOCKOUT FINISHED IN REGULATION
+    
+
+    if match.is_knockout:
+        return max(
+            match.regulation_elapsed_seconds,
+            90 * 60,
+        )
+
+    
+    # NORMAL / GROUP-STAGE MATCH
+   
+    return max(
+        match.regulation_elapsed_seconds,
+        90 * 60,
     )
-
-    return (45 * 60) + max(
-        0,
-        int(elapsed) - second_half_pauses,
-    )
-
-
-
 def create_system_commentary(
     match,
     event_type,
@@ -248,7 +526,8 @@ def create_system_commentary(
 
 def validate_active_play(match):
     """
-    Allow football actions only during an active playing half.
+    Allow football actions only during an active
+    regulation or knockout extra-time playing half.
     """
 
     if match.status != Match.Status.LIVE:
@@ -256,10 +535,14 @@ def validate_active_play(match):
             "This action requires a live match."
         )
 
-    if match.phase not in (
+    allowed_phases = (
         Match.Phase.FIRST_HALF,
         Match.Phase.SECOND_HALF,
-    ):
+        Match.Phase.EXTRA_TIME_FIRST_HALF,
+        Match.Phase.EXTRA_TIME_SECOND_HALF,
+    )
+
+    if match.phase not in allowed_phases:
         raise ValidationError(
             "Football actions are not allowed during "
             f"the {match.get_phase_display()} phase."
@@ -269,7 +552,6 @@ def validate_active_play(match):
         raise ValidationError(
             "The match is currently paused."
         )
-
 
 @transaction.atomic
 def start_match(match_id):
@@ -330,6 +612,730 @@ def start_match(match_id):
     )
 
     return match
+
+
+@transaction.atomic
+def end_regulation(match_id):
+    """
+    End regulation time and freeze the clock.
+
+    This does not finish the match.
+    """
+
+    match = (
+        Match.objects
+        .select_for_update()
+        .get(pk=match_id)
+    )
+
+    if match.status != Match.Status.LIVE:
+        raise ValidationError(
+            "Only live matches can end regulation."
+        )
+
+    if match.phase != Match.Phase.SECOND_HALF:
+        raise ValidationError(
+            "Regulation can only end during the second half."
+        )
+
+    if match.is_paused:
+        raise ValidationError(
+            "Resume the match before ending regulation."
+        )
+
+    now = timezone.now()
+
+    # Capture the actual playing time before changing phase.
+    elapsed_seconds = get_match_clock_seconds(
+        match,
+        at_time=now,
+    )
+
+    match.regulation_elapsed_seconds = elapsed_seconds
+    match.phase = Match.Phase.REGULATION_ENDED
+    match.extra_time_minutes = 0
+
+    match.save(
+        update_fields=[
+            "regulation_elapsed_seconds",
+            "phase",
+            "extra_time_minutes",
+        ]
+    )
+
+    commentary = create_system_commentary(
+        match=match,
+        event_type=MatchEvent.EventType.REGULATION_ENDED,
+        note="The referee blows the whistle. Regulation time has ended.",
+        minute_override=elapsed_seconds // 60,
+    )
+
+    transaction.on_commit(
+        lambda: broadcast_match_update(
+            match,
+            "regulation_ended",
+            commentary,
+        )
+    )
+
+    return match
+
+
+@transaction.atomic
+def start_extra_time(match_id):
+    """
+    Start the first 15-minute extra-time half.
+
+    Allowed only for tied knockout matches
+    after regulation has ended.
+    """
+
+    match = (
+        Match.objects
+        .select_for_update()
+        .get(pk=match_id)
+    )
+
+    if match.status != Match.Status.LIVE:
+        raise ValidationError(
+            "Only live matches can start extra time."
+        )
+
+    if not match.is_knockout:
+        raise ValidationError(
+            "Extra time is only available for knockout matches."
+        )
+
+    if match.phase != Match.Phase.REGULATION_ENDED:
+        raise ValidationError(
+            "Regulation must end before extra time can start."
+        )
+
+    if match.home_score != match.away_score:
+        raise ValidationError(
+            "Extra time is only required when the score is tied."
+        )
+
+    if match.is_paused:
+        raise ValidationError(
+            "Resume the match before starting extra time."
+        )
+
+    now = timezone.now()
+
+    match.phase = Match.Phase.EXTRA_TIME_FIRST_HALF
+
+    match.extra_time_first_half_started_at = now
+
+    # Record the existing pause duration so that earlier
+    # regulation pauses do not affect the extra-time clock.
+    match.extra_time_pause_baseline_seconds = (
+        match.total_paused_seconds
+    )
+
+    match.extra_time_first_half_elapsed_seconds = 0
+    match.extra_time_elapsed_seconds = 0
+    match.extra_time_minutes = 0
+
+    match.save(
+        update_fields=[
+            "phase",
+            "extra_time_first_half_started_at",
+            "extra_time_pause_baseline_seconds",
+            "extra_time_first_half_elapsed_seconds",
+            "extra_time_elapsed_seconds",
+            "extra_time_minutes",
+        ]
+    )
+
+    commentary = create_system_commentary(
+        match=match,
+        event_type=MatchEvent.EventType.EXTRA_TIME_STARTED,
+        note="Extra time begins. The first 15-minute half is underway.",
+        minute_override=90,
+    )
+
+    transaction.on_commit(
+        lambda: broadcast_match_update(
+            match,
+            "extra_time_started",
+            commentary,
+        )
+    )
+
+    return match
+
+
+@transaction.atomic
+def end_extra_time_first_half(match_id):
+    """
+    End the first 15-minute extra-time half
+    and freeze the match clock.
+    """
+
+    match = (
+        Match.objects
+        .select_for_update()
+        .get(pk=match_id)
+    )
+
+    if match.status != Match.Status.LIVE:
+        raise ValidationError(
+            "Only live matches can enter the extra-time interval."
+        )
+
+    if match.phase != Match.Phase.EXTRA_TIME_FIRST_HALF:
+        raise ValidationError(
+            "The match is not in the first extra-time half."
+        )
+
+    if match.is_paused:
+        raise ValidationError(
+            "Resume the match before ending this half."
+        )
+
+    now = timezone.now()
+
+    # Capture the current match clock before changing phase.
+    elapsed_seconds = get_match_clock_seconds(
+        match,
+        at_time=now,
+    )
+    # Extra-time first half officially reaches at least 105:00.
+# This also allows fast admin/testing without waiting 15 real minutes.
+    elapsed_seconds = max(
+       elapsed_seconds,
+       105 * 60,
+     )
+
+    # Store elapsed time within the first extra-time half.
+    match.extra_time_first_half_elapsed_seconds = max(
+        0,
+        elapsed_seconds - (90 * 60)
+    )
+
+    match.extra_time_first_half_ended_at = now
+    match.phase = Match.Phase.EXTRA_TIME_INTERVAL
+
+    match.save(
+        update_fields=[
+            "extra_time_first_half_elapsed_seconds",
+            "extra_time_first_half_ended_at",
+            "phase",
+        ]
+    )
+
+    commentary = create_system_commentary(
+        match=match,
+        event_type=MatchEvent.EventType.EXTRA_TIME_HALF_TIME,
+        note="The first extra-time half has ended.",
+        minute_override=elapsed_seconds // 60,
+    )
+
+    transaction.on_commit(
+        lambda: broadcast_match_update(
+            match,
+            "extra_time_half_time",
+            commentary,
+        )
+    )
+
+    return match
+
+@transaction.atomic
+def start_extra_time_second_half(match_id):
+    """
+    Start the second 15-minute extra-time half.
+
+    The match clock resumes from 105:00,
+    excluding previous pauses and the ET interval.
+    """
+
+    match = (
+        Match.objects
+        .select_for_update()
+        .get(pk=match_id)
+    )
+
+    if match.status != Match.Status.LIVE:
+        raise ValidationError(
+            "Only live matches can start the second extra-time half."
+        )
+
+    if not match.is_knockout:
+        raise ValidationError(
+            "Extra time is only available for knockout matches."
+        )
+
+    if match.phase != Match.Phase.EXTRA_TIME_INTERVAL:
+        raise ValidationError(
+            "The match must be at the extra-time interval first."
+        )
+
+    if match.is_paused:
+        raise ValidationError(
+            "Resume the match before starting the second extra-time half."
+        )
+
+    now = timezone.now()
+
+    # Start the second ET half.
+    match.phase = Match.Phase.EXTRA_TIME_SECOND_HALF
+    match.extra_time_second_half_started_at = now
+
+    # Exclude pauses accumulated during regulation
+    # and the first extra-time half.
+    match.extra_time_second_half_pause_baseline_seconds = (
+        match.total_paused_seconds
+    )
+
+    match.extra_time_minutes = 0
+
+    match.save(
+        update_fields=[
+            "phase",
+            "extra_time_second_half_started_at",
+            "extra_time_second_half_pause_baseline_seconds",
+            "extra_time_minutes",
+        ]
+    )
+
+    commentary = create_system_commentary(
+        match=match,
+        event_type=MatchEvent.EventType.EXTRA_TIME_SECOND_HALF_STARTED,
+        note="The second extra-time half begins. Fifteen minutes remain.",
+        minute_override=105,
+    )
+
+    transaction.on_commit(
+        lambda: broadcast_match_update(
+            match,
+            "extra_time_second_half_started",
+            commentary,
+        )
+    )
+
+    return match
+
+@transaction.atomic
+def end_extra_time(match_id):
+    """
+    End the second extra-time half.
+
+    If scores are tied:
+        Move to penalty shootout.
+
+    If a team is leading:
+        Finish the knockout match.
+    """
+
+    match = (
+        Match.objects
+        .select_for_update()
+        .get(pk=match_id)
+    )
+
+    if match.status != Match.Status.LIVE:
+        raise ValidationError(
+            "Only live matches can end extra time."
+        )
+
+    if not match.is_knockout:
+        raise ValidationError(
+            "Extra time is only available for knockout matches."
+        )
+
+    if match.phase != Match.Phase.EXTRA_TIME_SECOND_HALF:
+        raise ValidationError(
+            "The match must be in the second extra-time half."
+        )
+
+    if match.is_paused:
+        raise ValidationError(
+            "Resume the match before ending extra time."
+        )
+
+    now = timezone.now()
+
+    # Capture the final playing time BEFORE changing phase.
+    elapsed_seconds = get_match_clock_seconds(
+        match,
+        at_time=now,
+    )
+    elapsed_seconds = max(
+      elapsed_seconds,
+      120 * 60,
+     )
+    # Preserve the final extra-time clock.
+    match.extra_time_elapsed_seconds = elapsed_seconds
+    match.extra_time_minutes = 0
+
+    if match.home_score == match.away_score:
+
+        # Still tied after 120 minutes.
+        # The penalty shootout will decide the winner.
+        match.phase = Match.Phase.PENALTY_SHOOTOUT
+
+        event_type = (
+            MatchEvent.EventType.PENALTY_SHOOTOUT_STARTED
+        )
+
+        broadcast_type = "penalty_shootout_started"
+
+        note = (
+            "Extra time has ended with the scores level. "
+            "The match will be decided by a penalty shootout."
+        )
+
+    else:
+
+        # A team is leading after extra time.
+        # The knockout match has a winner.
+        match.status = Match.Status.FINISHED
+        match.phase = Match.Phase.FULL_TIME
+        match.ended_at = now
+
+        event_type = MatchEvent.EventType.EXTRA_TIME_ENDED
+
+        broadcast_type = "extra_time_ended"
+
+        note = (
+            "Extra time has ended. "
+            "The referee blows the final whistle."
+        )
+
+    match.save(
+        update_fields=[
+            "extra_time_elapsed_seconds",
+            "extra_time_minutes",
+            "status",
+            "phase",
+            "ended_at",
+        ]
+    )
+
+    commentary = create_system_commentary(
+        match=match,
+        event_type=event_type,
+        note=note,
+        minute_override=elapsed_seconds // 60,
+    )
+
+    transaction.on_commit(
+        lambda: broadcast_match_update(
+            match,
+            broadcast_type,
+            commentary,
+        )
+    )
+
+    return match
+
+
+def get_shootout_state(match):
+    """
+    Calculate penalty shootout scores, progress,
+    and whether a winner has been decided.
+
+    Supports:
+    - Initial five kicks per team
+    - Early mathematical victory
+    - Sudden death
+    """
+
+    kicks = list(
+        PenaltyShootoutKick.objects
+        .filter(match=match)
+        .order_by("created_at", "id")
+    )
+
+    home_kicks = [
+        kick for kick in kicks
+        if kick.team_id == match.home_team_id
+    ]
+
+    away_kicks = [
+        kick for kick in kicks
+        if kick.team_id == match.away_team_id
+    ]
+
+    home_taken = len(home_kicks)
+    away_taken = len(away_kicks)
+
+    home_score = sum(
+        1 for kick in home_kicks if kick.scored
+    )
+
+    away_score = sum(
+        1 for kick in away_kicks if kick.scored
+    )
+
+    winner_id = None
+
+    # Initial five kicks:
+    # Check whether either team has an unreachable lead.
+    if home_taken <= 5 and away_taken <= 5:
+
+        home_remaining = 5 - home_taken
+        away_remaining = 5 - away_taken
+
+        if home_score > away_score + away_remaining:
+            winner_id = match.home_team_id
+
+        elif away_score > home_score + home_remaining:
+            winner_id = match.away_team_id
+
+    # Sudden death:
+    # A winner exists only after both teams have taken
+    # the same number of kicks beyond the initial five.
+    if (
+        winner_id is None
+        and home_taken >= 5
+        and away_taken >= 5
+        and home_taken == away_taken
+    ):
+        if home_score > away_score:
+            winner_id = match.home_team_id
+
+        elif away_score > home_score:
+            winner_id = match.away_team_id
+
+    # Home team shoots first.
+    # Kick order: Home 1, Away 1, Home 2, Away 2...
+    next_team_id = (
+        match.home_team_id
+        if len(kicks) % 2 == 0
+        else match.away_team_id
+    )
+
+    return {
+        "home_score": home_score,
+        "away_score": away_score,
+        "home_taken": home_taken,
+        "away_taken": away_taken,
+        "winner_id": winner_id,
+        "is_finished": winner_id is not None,
+        "next_team_id": (
+            None if winner_id is not None else next_team_id
+        ),
+    }
+
+
+@transaction.atomic
+def record_shootout_kick(
+    match_id,
+    team_id,
+    scored,
+    player_id=None,
+    player_name="",
+):
+    """
+    Record an individual penalty shootout attempt.
+
+    Rules:
+    - Match must be in PENALTY_SHOOTOUT phase.
+    - Home team takes the first penalty.
+    - Teams alternate after every attempt.
+    - Maximum five initial kicks per team.
+    - Sudden death continues if required.
+    - Match automatically finishes when a winner exists.
+    """
+
+    match = (
+        Match.objects
+        .select_for_update()
+        .get(pk=match_id)
+    )
+
+    if match.status != Match.Status.LIVE:
+        raise ValidationError(
+            "Only live matches can record penalty kicks."
+        )
+
+    if not match.is_knockout:
+        raise ValidationError(
+            "Penalty shootouts are only available for knockout matches."
+        )
+
+    if match.phase != Match.Phase.PENALTY_SHOOTOUT:
+        raise ValidationError(
+            "The match is not in the penalty shootout phase."
+        )
+
+    if match.is_paused:
+        raise ValidationError(
+            "Resume the match before recording a penalty."
+        )
+
+    # -----------------------------------
+    # VALIDATE INPUT
+    # -----------------------------------
+
+    try:
+        team_id = int(team_id)
+    except (TypeError, ValueError):
+        raise ValidationError(
+            "A valid team ID is required."
+        )
+
+    if type(scored) is not bool:
+        raise ValidationError(
+            "scored must be a boolean (true or false)."
+        )
+
+    if team_id not in (
+        match.home_team_id,
+        match.away_team_id,
+    ):
+        raise ValidationError(
+            "The selected team does not belong to this match."
+        )
+
+    # -----------------------------------
+    # GET CURRENT SHOOTOUT STATE
+    # -----------------------------------
+
+    state = get_shootout_state(match)
+
+    if state["is_finished"]:
+        raise ValidationError(
+            "The penalty shootout has already finished."
+        )
+
+    if team_id != state["next_team_id"]:
+        raise ValidationError(
+            "It is not this team's turn to take a penalty."
+        )
+
+    is_home_team = (
+        team_id == match.home_team_id
+    )
+
+    kick_number = (
+        state["home_taken"] + 1
+        if is_home_team
+        else state["away_taken"] + 1
+    )
+
+    # -----------------------------------
+    # OPTIONAL PLAYER VALIDATION
+    # -----------------------------------
+
+    player = None
+
+    if player_id is not None:
+
+        try:
+            player_id = int(player_id)
+        except (TypeError, ValueError):
+            raise ValidationError(
+                "A valid player ID is required."
+            )
+
+        player = Player.objects.filter(
+            pk=player_id,
+        ).first()
+
+        if player is None:
+            raise ValidationError(
+                "The selected player does not exist."
+            )
+
+        # Note: Player/team membership validation can
+        # be added here using your existing roster
+        # relationship once we connect the API.
+
+    # -----------------------------------
+    # CREATE THE PENALTY RECORD
+    # -----------------------------------
+
+    kick = PenaltyShootoutKick.objects.create(
+        match=match,
+        team_id=team_id,
+        player=player,
+        player_name=player_name or "",
+        kick_number=kick_number,
+        scored=scored,
+    )
+
+    # Recalculate after saving the new kick.
+    updated_state = get_shootout_state(match)
+
+    result = "scored" if scored else "missed"
+
+    commentary = create_system_commentary(
+        match=match,
+        event_type=(
+            MatchEvent.EventType.PENALTY_KICK
+        ),
+        note=(
+            f"Penalty shootout: Team {team_id} "
+            f"{result} kick {kick_number}. "
+            f"Score: "
+            f"{updated_state['home_score']}-"
+            f"{updated_state['away_score']}."
+        ),
+        minute_override=120,
+    )
+
+    # -----------------------------------
+    # AUTOMATIC WINNER DETECTION
+    # -----------------------------------
+
+    if updated_state["is_finished"]:
+
+        winner_id = updated_state["winner_id"]
+
+        match.status = Match.Status.FINISHED
+        match.phase = Match.Phase.FULL_TIME
+        match.ended_at = timezone.now()
+
+        match.save(
+            update_fields=[
+                "status",
+                "phase",
+                "ended_at",
+            ]
+        )
+
+        final_commentary = create_system_commentary(
+            match=match,
+            event_type=(
+                MatchEvent.EventType.PENALTY_SHOOTOUT_FINISHED
+            ),
+            note=(
+                f"Penalty shootout finished. "
+                f"Team {winner_id} wins "
+                f"{updated_state['home_score']}-"
+                f"{updated_state['away_score']} on penalties."
+            ),
+            minute_override=120,
+        )
+
+        transaction.on_commit(
+            lambda: broadcast_match_update(
+                match,
+                "penalty_shootout_finished",
+                final_commentary,
+            )
+        )
+
+    else:
+
+        transaction.on_commit(
+            lambda: broadcast_match_update(
+                match,
+                "penalty_shootout_kick",
+                commentary,
+            )
+        )
+
+    return {
+        "kick": kick,
+        "shootout": updated_state,
+        "match": match,
+    }
+
 
 
 @transaction.atomic
@@ -473,10 +1479,14 @@ def pause_match(match_id):
             "Only live matches can be paused."
         )
 
+    
     if match.phase not in (
         Match.Phase.FIRST_HALF,
         Match.Phase.SECOND_HALF,
+        Match.Phase.EXTRA_TIME_FIRST_HALF,
+        Match.Phase.EXTRA_TIME_SECOND_HALF,
     ):
+
         raise ValidationError(
             "Only an active playing half can be paused."
         )
@@ -525,10 +1535,14 @@ def resume_match(match_id):
             "Only live matches can be resumed."
         )
    
+    
     if match.phase not in (
         Match.Phase.FIRST_HALF,
         Match.Phase.SECOND_HALF,
+        Match.Phase.EXTRA_TIME_FIRST_HALF,
+        Match.Phase.EXTRA_TIME_SECOND_HALF,
     ):
+
         raise ValidationError(
             "Only a temporarily paused playing half "
             "can be resumed."
@@ -689,8 +1703,26 @@ def set_extra_time(match_id, minutes):
 
     return match
 
+
 @transaction.atomic
 def finish_match(match_id):
+    """
+    Finish a match safely.
+
+    Normal match:
+        Can finish during the second half
+        or after regulation ends.
+
+    Knockout match:
+        Must end regulation first.
+        Cannot finish with tied scores.
+        Tied matches must proceed through extra time
+        and, if necessary, penalty shootouts.
+
+    Matches completed by end_extra_time() are
+    already marked FINISHED and must not be finished again.
+    """
+
     match = (
         Match.objects
         .select_for_update()
@@ -702,54 +1734,85 @@ def finish_match(match_id):
         .get(pk=match_id)
     )
 
-    # Only live matches can be finished.
     if match.status != Match.Status.LIVE:
         raise ValidationError(
             "Only live matches can be finished."
         )
 
-    # NeW Prevent finishing a paused match.
     if match.is_paused:
         raise ValidationError(
             "Resume the match before finishing it."
         )
 
+    # -----------------------------------
+    # NORMAL MATCH
+    # -----------------------------------
 
-    if match.phase not in (
-        Match.Phase.SECOND_HALF,
-        Match.Phase.REGULATION_ENDED,
-    ):
-        raise ValidationError(
-            "The match cannot be finished before "
-            "the second half."
-        )
+    if not match.is_knockout:
+
+        if match.phase not in (
+            Match.Phase.SECOND_HALF,
+            Match.Phase.REGULATION_ENDED,
+        ):
+            raise ValidationError(
+                "A normal match can only finish during "
+                "the second half or after regulation."
+            )
+
+    # -----------------------------------
+    # KNOCKOUT MATCH
+    # -----------------------------------
+
+    else:
+
+        if match.phase != Match.Phase.REGULATION_ENDED:
+            raise ValidationError(
+                "A knockout match must end regulation "
+                "before it can be finished."
+            )
+
+        if match.home_score == match.away_score:
+            raise ValidationError(
+                "The knockout match is tied. "
+                "Start extra time instead."
+            )
+
+    now = timezone.now()
+
+    # Capture the clock BEFORE switching to FULL_TIME.
+    # This prevents the clock from continuing after the whistle.
+    final_clock = get_match_clock_seconds(
+        match,
+        at_time=now,
+    )
+    if not match.is_knockout:
+        final_clock = max(final_clock, 90 * 60)
+
+    
 
 
-    # Finish the match.
+
+    # Save the regulation clock snapshot.
+    match.regulation_elapsed_seconds = final_clock
+
     match.status = Match.Status.FINISHED
     match.phase = Match.Phase.FULL_TIME
-    match.ended_at = timezone.now()
+    match.ended_at = now
 
     match.save(
         update_fields=[
+            "regulation_elapsed_seconds",
             "status",
             "phase",
             "ended_at",
         ]
     )
 
-    # Notify connected WebSocket clients.
-    # transaction.on_commit(
-    #     lambda: broadcast_match_update(
-    #         match,
-    #         "match_finished",
-    #     )
-    # )
     commentary = create_system_commentary(
         match=match,
         event_type=MatchEvent.EventType.MATCH_FINISHED,
         note="The referee blows the final whistle. Full time!",
-        at_time=match.ended_at,
+        minute_override=final_clock // 60,
     )
 
     transaction.on_commit(
@@ -759,8 +1822,8 @@ def finish_match(match_id):
             commentary,
         )
     )
-    return match
 
+    return match
 
 @transaction.atomic
 def record_goal(
@@ -778,24 +1841,18 @@ def record_goal(
         .get(pk=match_id)
     )
 
-    # if match.status != Match.Status.LIVE:
-    #     raise ValidationError(
-    #         "Goals can only be recorded for live matches."
-    #     )
-
-    # # NEW: Prevent recording goals while the match is paused.
-    # if match.is_paused:
-    #     raise ValidationError(
-    #         "Goals cannot be recorded while the match is paused."
-    #     )
+   
+    
     validate_active_play(match)
+
+    # Always use the server-calculated match minute.
     minute = get_match_clock_seconds(match) // 60
+
     try:
         team_id = int(team_id)
-        minute = int(minute)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         raise ValidationError(
-            "Team ID and minute must be valid integers."
+            "Team ID must be a valid integer."
         )
 
     if team_id not in (
@@ -805,12 +1862,13 @@ def record_goal(
         raise ValidationError(
             "The selected team is not playing in this match."
         )
+    
+    if minute < 0:
+      raise ValidationError(
+        "Match minute cannot be negative."
+    )
 
-    if minute < 0 or minute > 120:
-        raise ValidationError(
-            "Minute must be between 0 and 120."
-        )
-
+    
     player = None
 
     if player_id not in (None, ""):
@@ -893,6 +1951,15 @@ def record_match_event(
     
     validate_active_play(match)
     minute = get_match_clock_seconds(match) // 60
+
+    try:
+        team_id = int(team_id)
+    except (TypeError, ValueError, OverflowError):
+        raise ValidationError(
+            "Team ID must be a valid integer."
+        )
+
+
     if team_id not in (
         match.home_team_id,
         match.away_team_id,
@@ -902,6 +1969,7 @@ def record_match_event(
         )
 
     valid_types = {
+        MatchEvent.EventType.FOUL,
         MatchEvent.EventType.YELLOW_CARD,
         MatchEvent.EventType.RED_CARD,
         MatchEvent.EventType.PENALTY_KICK,
@@ -913,14 +1981,46 @@ def record_match_event(
             "Unsupported match event type."
         )
 
-    if minute < 0 or minute > 120:
-        raise ValidationError(
-            "Minute must be between 0 and 120."
-        )
+    if minute < 0:
+       raise ValidationError(
+         "Match minute cannot be negative."
+    )
+
+    # Resolve and validate an optional registered player.
+    player = None
+
+    if player_id not in (None, ""):
+        try:
+            player_id = int(player_id)
+        except (TypeError, ValueError, OverflowError):
+            raise ValidationError(
+                "Player ID must be a valid integer."
+            )
+
+        try:
+            player = Player.objects.get(pk=player_id)
+        except Player.DoesNotExist:
+            raise ValidationError(
+                "The selected player does not exist."
+            )
+
+        if player.team_id != team_id:
+            raise ValidationError(
+                "The selected player does not belong to the selected team."
+            )
+
+        if not player.is_active:
+            raise ValidationError(
+                "Cannot record an event for an inactive player."
+            )
+
+        # Always use the registered player's official name.
+        player_name = player.full_name
 
     event = MatchEvent.objects.create(
         match=match,
         team_id=team_id,
+        player=player,
         type=event_type,
         player_name=player_name,
         minute=minute,
@@ -1012,12 +2112,14 @@ def get_event_standings(event_id):
         matches = Match.objects.filter(
             round__event_id=event_id,
             status=Match.Status.FINISHED,
+            is_knockout=False,
         ).filter(
             home_team=team
         ) | Match.objects.filter(
             round__event_id=event_id,
             status=Match.Status.FINISHED,
             away_team=team,
+            is_knockout=False,
         )
 
         played = matches.count()

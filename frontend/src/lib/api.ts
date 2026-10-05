@@ -89,19 +89,58 @@ export async function getStandings(eventId: number): Promise<Standing[]> {
 }
 
 export async function getMatches(): Promise<Match[]> {
-  const response = await fetch(`${API_BASE_URL}/matches/`, {
-    cache: "no-store",
-  });
+  let url: string | null = `${API_BASE_URL}/matches/`;
 
-  if (!response.ok) {
-    throw new Error("Failed to fetch matches");
+  const matchesById = new Map<number, Match>();
+  const visitedUrls = new Set<string>();
+
+  while (url) {
+    // Protect against a malformed pagination loop.
+    if (visitedUrls.has(url)) {
+      console.warn("Duplicate pagination URL detected:", url);
+      break;
+    }
+
+    visitedUrls.add(url);
+
+    const response: Response = await fetch(url, {
+      cache: "no-store",
+    });
+
+    if (!response.ok) {
+      throw new Error(
+        `Unable to load matches (HTTP ${response.status}).`
+      );
+    }
+
+    const data: unknown = await response.json();
+
+    // Non-paginated response
+    if (Array.isArray(data)) {
+      for (const match of data as Match[]) {
+        matchesById.set(match.id, match);
+      }
+
+      break;
+    }
+
+    // Paginated DRF response
+    const page = data as {
+      results?: Match[];
+      next?: string | null;
+    };
+
+    if (Array.isArray(page.results)) {
+      for (const match of page.results) {
+        matchesById.set(match.id, match);
+      }
+    }
+
+    url = page.next ?? null;
   }
 
-  const data: PaginatedResponse<Match> = await response.json();
-
-  return data.results;
+  return Array.from(matchesById.values());
 }
-
 export async function getMatch(id: number): Promise<Match> {
   const response = await fetch(`${API_BASE_URL}/matches/${id}/`, {
     cache: "no-store",

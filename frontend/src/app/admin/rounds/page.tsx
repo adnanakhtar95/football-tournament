@@ -64,6 +64,7 @@ interface TournamentRound {
   event: number;
   name: string;
   order_number: number;
+   round_type: "group" | "knockout";
 }
 
 /* =========================================
@@ -234,6 +235,8 @@ export default function AdminRoundsPage() {
   const [orderNumber, setOrderNumber] =
     useState("");
 
+  const [roundType, setRoundType] =
+    useState<"group" | "knockout">("group");
   const [editingId, setEditingId] = useState<
     number | null
   >(null);
@@ -390,6 +393,7 @@ export default function AdminRoundsPage() {
     setEditingId(null);
     setName("");
     setOrderNumber("");
+    setRoundType("group");
     setEditorOpen(false);
 
     if (selectedEventId) {
@@ -446,6 +450,7 @@ export default function AdminRoundsPage() {
     setEditingId(null);
     setName("");
     setOrderNumber("");
+    setRoundType("group");
   }
 
   function scrollToEditor() {
@@ -480,6 +485,9 @@ export default function AdminRoundsPage() {
     setOrderNumber(
       String(round.order_number)
     );
+
+
+     setRoundType(round.round_type);
 
     setError("");
     setMessage("");
@@ -567,6 +575,7 @@ export default function AdminRoundsPage() {
           event: Number(eventId),
           name: name.trim(),
           order_number: parsedOrder,
+           round_type: roundType,
         }),
       });
 
@@ -1143,6 +1152,53 @@ export default function AdminRoundsPage() {
                     required
                   />
                 </div>
+                <div className="sm:col-span-2">
+  <label
+    htmlFor="round-type"
+    className={labelClass}
+  >
+    Stage Type
+  </label>
+
+  <div className="relative">
+    <select
+      id="round-type"
+      value={roundType}
+      onChange={(event) =>
+        setRoundType(
+          event.target.value as
+            | "group"
+            | "knockout"
+        )
+      }
+      disabled={
+        !selectedEventId || saving
+      }
+      className={`${inputClass} appearance-none pr-10`}
+    >
+      <option value="group">
+        Group / League
+      </option>
+
+      <option value="knockout">
+        Knockout
+      </option>
+    </select>
+<p className="mt-2 text-xs text-white">
+  DEBUG roundType: {roundType}
+</p>
+    <ChevronDown
+      size={15}
+      className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-[#84A0C1]"
+    />
+  </div>
+
+  <p className="mt-2 text-[10px] leading-5 text-[#718CAC]">
+    {roundType === "knockout"
+      ? "A winner is required. Drawn matches can proceed to extra time and penalties."
+      : "Standard group or league stage. Matches may finish as a draw."}
+  </p>
+</div>
 
                 <div className="flex flex-wrap gap-3 border-t border-[#293E58] pt-5 sm:col-span-2">
                   <button
@@ -1436,6 +1492,16 @@ export default function AdminRoundsPage() {
                                     EDITING
                                   </span>
                                 )}
+                                <span
+                                  className={`rounded border px-2 py-0.5 text-[9px] font-extrabold uppercase tracking-[0.08em] ${round.round_type === "knockout"
+                                      ? "border-[#D6A65D]/50 bg-[#D6A65D]/10 text-[#F0CD92]"
+                                      : "border-[#448AFF]/40 bg-[#2563EB]/10 text-[#91BFFF]"
+                                    }`}
+                                >
+                                  {round.round_type === "knockout"
+                                    ? "Knockout"
+                                    : "Group / League"}
+                                </span>
                               </div>
 
                               <h3 className="font-heading break-words text-[17px] font-extrabold tracking-[-0.035em] text-white sm:text-[19px]">

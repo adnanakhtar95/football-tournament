@@ -5,6 +5,7 @@ from .models import (
     EventTeam,
     Match,
     MatchEvent,
+    PenaltyShootoutKick,
     Player,
     Round,
     Team,
@@ -97,6 +98,15 @@ class MatchEventSerializer(serializers.ModelSerializer):
 class MatchSerializer(serializers.ModelSerializer):
     home_team = TeamSerializer(read_only=True)
     away_team = TeamSerializer(read_only=True)
+    
+    shootout = serializers.SerializerMethodField(
+        read_only=True
+    )
+
+    shootout_kicks = serializers.SerializerMethodField(
+        read_only=True
+    )
+
 
     # Authoritative football clock
     elapsed_seconds = serializers.SerializerMethodField()
@@ -141,6 +151,19 @@ class MatchSerializer(serializers.ModelSerializer):
             # Computed clock
             "elapsed_seconds",
             "clock_seconds",
+
+            "is_knockout",
+            "regulation_elapsed_seconds",
+            "extra_time_first_half_started_at",
+            "extra_time_first_half_elapsed_seconds",
+            "extra_time_first_half_ended_at",
+            "extra_time_second_half_started_at",
+            "extra_time_elapsed_seconds",
+            "shootout",
+            "shootout_kicks",
+
+            "extra_time_pause_baseline_seconds",
+            "extra_time_second_half_pause_baseline_seconds",
         ]
 
     def get_clock_seconds(self, obj):
@@ -156,6 +179,38 @@ class MatchSerializer(serializers.ModelSerializer):
         will continue to receive the football clock.
         """
         return self.get_clock_seconds(obj)
+    
+    def get_shootout(self, obj):
+        """
+        Return the current penalty shootout state.
+        """
+
+        if not obj.is_knockout:
+            return None
+
+        from .services import get_shootout_state
+
+        return get_shootout_state(obj)
+
+    def get_shootout_kicks(self, obj):
+        """
+        Return all recorded penalty attempts.
+        """
+
+        if not obj.is_knockout:
+            return []
+
+        kicks = (
+            obj.shootout_kicks
+            .select_related("team", "player")
+            .order_by("created_at", "id")
+        )
+
+        return PenaltyShootoutKickSerializer(
+            kicks,
+            many=True,
+        ).data
+
 
 
 class RoundSerializer(serializers.ModelSerializer):
@@ -170,9 +225,9 @@ class RoundSerializer(serializers.ModelSerializer):
             "id",
             "name",
             "order_number",
+            "round_type",
             "matches",
         ]
-
 
 class EventSerializer(serializers.ModelSerializer):
     teams = serializers.SerializerMethodField()
@@ -302,6 +357,7 @@ class AdminRoundSerializer(serializers.ModelSerializer):
             "event",
             "name",
             "order_number",
+            "round_type",
         ]
 
 
@@ -347,8 +403,27 @@ class AdminMatchSerializer(serializers.ModelSerializer):
             "second_half_stoppage_minutes",
             "second_half_pause_baseline_seconds",
 
-            # Read-only computed clock
+           # Read-only computed clock
             "clock_seconds",
+            "is_knockout",
+
+            # Knockout / extra-time lifecycle
+            "regulation_elapsed_seconds",
+
+            "extra_time_first_half_started_at",
+            "extra_time_first_half_elapsed_seconds",
+            "extra_time_first_half_ended_at",
+
+            "extra_time_second_half_started_at",
+            # "extra_time_second_half_ended_at",
+
+            "extra_time_pause_baseline_seconds",
+            "extra_time_second_half_pause_baseline_seconds",
+
+            "extra_time_elapsed_seconds",
+
+            # "extra_time_first_half_stoppage_minutes",
+            # "extra_time_second_half_stoppage_minutes",
         ]
 
         read_only_fields = [
@@ -369,7 +444,26 @@ class AdminMatchSerializer(serializers.ModelSerializer):
             "second_half_started_at",
             "second_half_stoppage_minutes",
             "second_half_pause_baseline_seconds",
-            "clock_seconds",
+
+             "clock_seconds",
+            "is_knockout",
+
+             "regulation_elapsed_seconds",
+
+            "extra_time_first_half_started_at",
+            "extra_time_first_half_elapsed_seconds",
+            "extra_time_first_half_ended_at",
+
+            "extra_time_second_half_started_at",
+            # "extra_time_second_half_ended_at",
+
+            "extra_time_pause_baseline_seconds",
+            "extra_time_second_half_pause_baseline_seconds",
+
+            "extra_time_elapsed_seconds",
+
+            # "extra_time_first_half_stoppage_minutes",
+            # "extra_time_second_half_stoppage_minutes",
         ]
 
     def get_clock_seconds(self, obj):
@@ -378,6 +472,7 @@ class AdminMatchSerializer(serializers.ModelSerializer):
         return get_match_clock_seconds(obj)
 
     def validate(self, attrs):
+
         from .services import validate_match_teams
 
         round_obj = attrs.get(
@@ -412,7 +507,87 @@ class AdminMatchSerializer(serializers.ModelSerializer):
         )
 
         return attrs
+    def create(self, validated_data):
+      round_obj = validated_data["round"]
 
+      validated_data["is_knockout"] = (
+        round_obj.round_type == Round.RoundType.KNOCKOUT
+     )
+
+      return super().create(validated_data)
+
+
+    def update(self, instance, validated_data):
+      round_obj = validated_data.get(
+        "round",
+        instance.round,
+    )
+
+      validated_data["is_knockout"] = (
+        round_obj.round_type == Round.RoundType.KNOCKOUT
+    )
+
+      return super().update(
+        instance,
+        validated_data,
+    )
+
+
+    
+   
 
 class AdminEventTeamSerializer(serializers.Serializer):
     team_id = serializers.IntegerField()  
+
+
+
+    
+class PenaltyShootoutKickSerializer(serializers.ModelSerializer):
+    """
+    Read-only representation of an individual
+    penalty shootout attempt.
+    """
+
+    class Meta:
+        model = PenaltyShootoutKick
+
+        fields = [
+            "id",
+            "match",
+            "team",
+            "player",
+            "player_name",
+            "kick_number",
+            "scored",
+            "created_at",
+        ]
+
+        read_only_fields = fields
+
+
+class RecordShootoutKickSerializer(serializers.Serializer):
+    """
+    Validates an incoming penalty attempt.
+
+    Kick order, kick number and winner detection
+    are handled by record_shootout_kick() in services.py.
+    """
+
+    team_id = serializers.IntegerField(
+        min_value=1,
+    )
+
+    scored = serializers.BooleanField()
+
+    player_id = serializers.IntegerField(
+        min_value=1,
+        required=False,
+        allow_null=True,
+    )
+
+    player_name = serializers.CharField(
+        max_length=150,
+        required=False,
+        allow_blank=True,
+        default="",
+    )

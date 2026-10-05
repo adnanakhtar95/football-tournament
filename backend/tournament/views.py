@@ -18,6 +18,7 @@ from .models import (
     EventTeam,
     Match,
     MatchEvent,
+    PenaltyShootoutKick,
     Player,
     Round,
     Team,
@@ -34,6 +35,8 @@ from .serializers import (
     MatchSerializer,
     PlayerSerializer,
     TeamSerializer,
+    PenaltyShootoutKickSerializer,
+    RecordShootoutKickSerializer,
 )
 
 from .services import (
@@ -47,6 +50,15 @@ from .services import (
     set_extra_time,
     start_match,
     start_second_half,
+    get_shootout_state,
+    record_shootout_kick,
+
+    # Knockout / extra-time lifecycle
+    end_regulation,
+    start_extra_time,
+    end_extra_time_first_half,
+    start_extra_time_second_half,
+    end_extra_time,
 )
 
 
@@ -416,7 +428,8 @@ class AdminMatchViewSet(viewsets.ModelViewSet):
             "home_team",
             "away_team",
         )
-        .all()
+        # .all()
+        .order_by("id")
     )
     serializer_class = AdminMatchSerializer
     permission_classes = [IsAdminUser]
@@ -504,7 +517,7 @@ class MatchViewSet(viewsets.ReadOnlyModelViewSet):
         .prefetch_related(
             "events__team",
         )
-        .all()
+        .order_by("id")
     )
 
     serializer_class = MatchSerializer
@@ -771,6 +784,127 @@ class MatchViewSet(viewsets.ReadOnlyModelViewSet):
             status=status.HTTP_201_CREATED,
         )
 
+    
+    # PUBLIC PENALTY SHOOTOUT DETAILS
+    
+
+    @action(
+        detail=True,
+        methods=["get"],
+        url_path="shootout",
+    )
+    def shootout(self, request, pk=None):
+        """
+        Return penalty shootout progress,
+        individual kicks, score and winner.
+        """
+
+        match = self.get_object()
+
+        kicks = (
+            PenaltyShootoutKick.objects
+            .filter(match=match)
+            .select_related("team", "player")
+            .order_by("created_at", "id")
+        )
+
+        state = get_shootout_state(match)
+
+        return Response({
+            "match_id": match.id,
+            "is_knockout": match.is_knockout,
+            "match_status": match.status,
+            "phase": match.phase,
+
+            "regular_score": {
+                "home": match.home_score,
+                "away": match.away_score,
+            },
+
+            "shootout": state,
+
+            "kicks": PenaltyShootoutKickSerializer(
+                kicks,
+                many=True,
+            ).data,
+        })
+
+    
+    # ADMIN: RECORD A PENALTY SHOOTOUT KICK
+   
+
+    @action(
+        detail=True,
+        methods=["post"],
+        permission_classes=[IsAdminUser],
+        url_path="shootout/kick",
+    )
+    def shootout_kick(self, request, pk=None):
+        """
+        Record an individual penalty shootout kick.
+
+        Kick order and winner detection are
+        handled by services.py.
+        """
+
+        serializer = RecordShootoutKickSerializer(
+            data=request.data
+        )
+
+        serializer.is_valid(
+            raise_exception=True
+        )
+
+        data = serializer.validated_data
+
+        try:
+            result = record_shootout_kick(
+                match_id=pk,
+                team_id=data["team_id"],
+                scored=data["scored"],
+                player_id=data.get("player_id"),
+                player_name=data.get(
+                    "player_name",
+                    "",
+                ),
+            )
+
+        except Match.DoesNotExist:
+            return Response(
+                {
+                    "detail": "Match not found."
+                },
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        except DjangoValidationError as exc:
+            return Response(
+                {
+                    "detail": exc.messages
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return Response(
+            {
+                "detail": (
+                    "Penalty shootout kick recorded."
+                ),
+
+                "kick": PenaltyShootoutKickSerializer(
+                    result["kick"]
+                ).data,
+
+                "shootout": result["shootout"],
+
+                "match": MatchSerializer(
+                    result["match"]
+                ).data,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
     @action(
         detail=True,
         methods=["get"],
@@ -797,6 +931,169 @@ class MatchViewSet(viewsets.ReadOnlyModelViewSet):
                 many=True,
             ).data
         )
+        # ==========================================
+    # KNOCKOUT / EXTRA-TIME MATCH CONTROL
+    # ==========================================
+
+    @action(
+        detail=True,
+        methods=["post"],
+        permission_classes=[IsAdminUser],
+        url_path="end-regulation",
+    )
+    def end_regulation_action(self, request, pk=None):
+        """
+        End regulation time and freeze the 90-minute clock.
+        """
+
+        try:
+            match = end_regulation(pk)
+
+        except Match.DoesNotExist:
+            return Response(
+                {"detail": "Match not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        except DjangoValidationError as exc:
+            return Response(
+                {"detail": str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return Response(
+            MatchSerializer(match).data,
+            status=status.HTTP_200_OK,
+        )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        permission_classes=[IsAdminUser],
+        url_path="start-extra-time",
+    )
+    def start_extra_time_action(self, request, pk=None):
+        """
+        Start the first extra-time half.
+        """
+
+        try:
+            match = start_extra_time(pk)
+
+        except Match.DoesNotExist:
+            return Response(
+                {"detail": "Match not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        except DjangoValidationError as exc:
+            return Response(
+                {"detail": str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return Response(
+            MatchSerializer(match).data,
+            status=status.HTTP_200_OK,
+        )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        permission_classes=[IsAdminUser],
+        url_path="extra-time-half-time",
+    )
+    def extra_time_half_time(self, request, pk=None):
+        """
+        End the first extra-time half and enter
+        the extra-time interval.
+        """
+
+        try:
+            match = end_extra_time_first_half(pk)
+
+        except Match.DoesNotExist:
+            return Response(
+                {"detail": "Match not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        except DjangoValidationError as exc:
+            return Response(
+                {"detail": str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return Response(
+            MatchSerializer(match).data,
+            status=status.HTTP_200_OK,
+        )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        permission_classes=[IsAdminUser],
+        url_path="extra-time-second-half",
+    )
+    def extra_time_second_half(self, request, pk=None):
+        """
+        Start the second extra-time half.
+        """
+
+        try:
+            match = start_extra_time_second_half(pk)
+
+        except Match.DoesNotExist:
+            return Response(
+                {"detail": "Match not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        except DjangoValidationError as exc:
+            return Response(
+                {"detail": str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return Response(
+            MatchSerializer(match).data,
+            status=status.HTTP_200_OK,
+        )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        permission_classes=[IsAdminUser],
+        url_path="end-extra-time",
+    )
+    def end_extra_time_action(self, request, pk=None):
+        """
+        End extra time.
+
+        A winner finishes the match.
+        A draw moves to the penalty shootout.
+        """
+
+        try:
+            match = end_extra_time(pk)
+
+        except Match.DoesNotExist:
+            return Response(
+                {"detail": "Match not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        except DjangoValidationError as exc:
+            return Response(
+                {"detail": str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return Response(
+            MatchSerializer(match).data,
+            status=status.HTTP_200_OK,
+        )
+    
 
 
 class LiveMatchViewSet(viewsets.ReadOnlyModelViewSet):

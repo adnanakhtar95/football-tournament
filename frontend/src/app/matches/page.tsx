@@ -31,17 +31,17 @@ import {
   WifiOff,
 } from "lucide-react";
 
-/* =========================================
+/* 
    CONFIGURATION
-========================================= */
+ */
 
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL ||
   "http://localhost:8000/api";
 
-/* =========================================
+/* 
    TYPES
-========================================= */
+ */
 
 type MatchStatus = "scheduled" | "live" | "finished";
 
@@ -74,9 +74,9 @@ interface MatchUpdate {
   away_score?: number;
 }
 
-/* =========================================
+/* 
    HELPERS
-========================================= */
+ */
 
 function getValidDate(value: string): Date | null {
   if (!value) return null;
@@ -187,9 +187,9 @@ function sortMatches(items: FootballMatch[]): FootballMatch[] {
   });
 }
 
-/* =========================================
+/* 
    TEAM CREST
-========================================= */
+ */
 
 function TeamCrest({
   team,
@@ -207,10 +207,9 @@ function TeamCrest({
         overflow-hidden border border-[#F5C66C]/25
         bg-[linear-gradient(145deg,#33363B,#171E27)]
         font-heading font-extrabold tracking-tight text-[#F5C66C]
-        ${
-          large
-            ? "h-16 w-16 rounded-2xl text-base sm:h-20 sm:w-20 sm:text-xl"
-            : "h-11 w-11 rounded-xl text-xs sm:h-13 sm:w-13 sm:text-sm"
+        ${large
+          ? "h-16 w-16 rounded-2xl text-base sm:h-20 sm:w-20 sm:text-xl"
+          : "h-11 w-11 rounded-xl text-xs sm:h-13 sm:w-13 sm:text-sm"
         }
       `}
     >
@@ -345,10 +344,9 @@ function FeaturedMatch({
             className={`
               mt-4 text-[10px] font-extrabold
               uppercase tracking-[0.2em]
-              ${
-                match.status === "live"
-                  ? "text-[#FF818A]"
-                  : "text-[#D9B679]"
+              ${match.status === "live"
+                ? "text-[#FF818A]"
+                : "text-[#D9B679]"
               }
             `}
           >
@@ -480,10 +478,9 @@ function FixtureStrip({
           <p
             className={`
               mt-1 text-[9px] font-extrabold tracking-[0.12em]
-              ${
-                match.status === "live"
-                  ? "text-[#FF818A]"
-                  : "text-[#83919E]"
+              ${match.status === "live"
+                ? "text-[#FF818A]"
+                : "text-[#83919E]"
               }
             `}
           >
@@ -564,6 +561,10 @@ export default function MatchesPage() {
 
   const [search, setSearch] = useState("");
 
+  const ITEMS_PER_PAGE = 10;
+
+  const [currentPage, setCurrentPage] = useState(1);
+
   const [loading, setLoading] = useState(true);
 
   const [error, setError] = useState("");
@@ -585,15 +586,31 @@ export default function MatchesPage() {
           setLoading(true);
         }
 
+        // const data = await getMatches();
+
+        // setMatches(
+        //   Array.isArray(data)
+        //     ? (data as FootballMatch[])
+        //     : []
+        // );
         const data = await getMatches();
 
-        setMatches(
-          Array.isArray(data)
-            ? (data as FootballMatch[])
-            : []
+        const matchList = Array.isArray(data)
+          ? (data as FootballMatch[])
+          : [];
+
+        // Prevent duplicate match IDs from entering React state.
+        const uniqueMatches = Array.from(
+          new Map(
+            matchList.map((match) => [match.id, match])
+          ).values()
         );
 
+        setMatches(uniqueMatches);
+
         setError("");
+
+       
       } catch (err) {
         console.error(
           "Failed to load matches:",
@@ -622,6 +639,15 @@ export default function MatchesPage() {
     void loadMatches(true);
   }, [loadMatches]);
 
+  useEffect(() => {
+    const interval = setInterval(() => {
+      void loadMatches();
+    }, 5000);
+
+    return () => {
+      clearInterval(interval);
+    };
+  }, [loadMatches]);
   /* =========================================
      GLOBAL REALTIME WEBSOCKET
   ========================================= */
@@ -703,18 +729,17 @@ export default function MatchesPage() {
             message.data
           ) as MatchUpdate;
 
+          // Ignore the initial websocket connection message.
           if (data.type === "connection") {
             return;
           }
 
+          // Immediately update the affected match if
+          // this websocket message contains a match id.
           if (data.match_id !== undefined) {
-            // Immediate local update.
-
             setMatches((currentMatches) =>
               currentMatches.map((match) => {
-                if (
-                  match.id !== data.match_id
-                ) {
+                if (match.id !== data.match_id) {
                   return match;
                 }
 
@@ -735,17 +760,10 @@ export default function MatchesPage() {
                 };
               })
             );
-
-            // Authoritative backend refresh.
-            scheduleRefresh();
-          } else if (
-            data.event ===
-              "match_started" ||
-            data.event ===
-              "match_finished"
-          ) {
-            scheduleRefresh();
           }
+
+
+          scheduleRefresh();
         } catch (err) {
           console.error(
             "Matches WebSocket message error:",
@@ -870,35 +888,67 @@ export default function MatchesPage() {
       filter === "all"
         ? matches
         : matches.filter(
-            (match) =>
-              match.status === filter
-          );
+          (match) =>
+            match.status === filter
+        );
 
     const searchTerm =
       search.trim().toLowerCase();
 
     const searched = searchTerm
       ? selected.filter((match) => {
-          const searchableText = [
-            match.home_team.name,
-            match.home_team.code,
-            match.away_team.name,
-            match.away_team.code,
-            match.venue,
-            String(match.id),
-          ]
-            .join(" ")
-            .toLowerCase();
+        const searchableText = [
+          match.home_team.name,
+          match.home_team.code,
+          match.away_team.name,
+          match.away_team.code,
+          match.venue,
+          String(match.id),
+        ]
+          .join(" ")
+          .toLowerCase();
 
-          return searchableText.includes(
-            searchTerm
-          );
-        })
+        return searchableText.includes(
+          searchTerm
+        );
+      })
       : selected;
 
     return sortMatches(searched);
   }, [matches, filter, search]);
 
+
+  /* 
+   PAGINATION
+ */
+
+  const totalPages = Math.max(
+    1,
+    Math.ceil(filteredMatches.length / ITEMS_PER_PAGE)
+  );
+
+  const paginatedMatches = useMemo(() => {
+    const startIndex =
+      (currentPage - 1) * ITEMS_PER_PAGE;
+
+    return filteredMatches.slice(
+      startIndex,
+      startIndex + ITEMS_PER_PAGE
+    );
+  }, [filteredMatches, currentPage]);
+
+  // Reset to page 1 when filter/search changes.
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [filter, search]);
+
+  // Protect against being on a page that no longer exists
+  // after WebSocket/status updates.
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
   /* =========================================
      FILTER OPTIONS
   ========================================= */
@@ -908,27 +958,27 @@ export default function MatchesPage() {
     label: string;
     count: number;
   }[] = [
-    {
-      value: "all",
-      label: "All Fixtures",
-      count: matches.length,
-    },
-    {
-      value: "live",
-      label: "Live Now",
-      count: liveCount,
-    },
-    {
-      value: "scheduled",
-      label: "Upcoming",
-      count: scheduledCount,
-    },
-    {
-      value: "finished",
-      label: "Results",
-      count: finishedCount,
-    },
-  ];
+      {
+        value: "all",
+        label: "All Fixtures",
+        count: matches.length,
+      },
+      {
+        value: "live",
+        label: "Live Now",
+        count: liveCount,
+      },
+      {
+        value: "scheduled",
+        label: "Upcoming",
+        count: scheduledCount,
+      },
+      {
+        value: "finished",
+        label: "Results",
+        count: finishedCount,
+      },
+    ];
 
   /* =========================================
      PAGE UI
@@ -991,10 +1041,9 @@ export default function MatchesPage() {
                 className={`
                   inline-flex items-center gap-1.5 rounded-md border
                   px-3 py-1.5 text-[10px] font-bold
-                  ${
-                    connected
-                      ? "border-[#F5C66C]/30 bg-[#F5C66C]/10 text-[#F5C66C]"
-                      : "border-white/15 bg-black/25 text-[#A3B0BC]"
+                  ${connected
+                    ? "border-[#F5C66C]/30 bg-[#F5C66C]/10 text-[#F5C66C]"
+                    : "border-white/15 bg-black/25 text-[#A3B0BC]"
                   }
                 `}
               >
@@ -1120,15 +1169,13 @@ export default function MatchesPage() {
                 key={stat.label}
                 className={`
                   flex items-center gap-4 py-5
-                  ${
-                    index > 0
-                      ? "sm:border-l sm:border-white/[0.08] sm:pl-6"
-                      : ""
+                  ${index > 0
+                    ? "sm:border-l sm:border-white/[0.08] sm:pl-6"
+                    : ""
                   }
-                  ${
-                    index >= 2
-                      ? "border-t border-white/[0.08] sm:border-t-0"
-                      : ""
+                  ${index >= 2
+                    ? "border-t border-white/[0.08] sm:border-t-0"
+                    : ""
                   }
                 `}
               >
@@ -1141,7 +1188,7 @@ export default function MatchesPage() {
                 <div>
                   <p className="font-mono text-2xl font-extrabold leading-none text-white sm:text-3xl">
                     {loading &&
-                    matches.length === 0
+                      matches.length === 0
                       ? "—"
                       : stat.value}
                   </p>
@@ -1232,10 +1279,9 @@ export default function MatchesPage() {
                   inline-flex items-center gap-2
                   rounded-md px-3.5 py-2.5
                   text-xs font-bold transition
-                  ${
-                    filter === item.value
-                      ? "bg-[#F5C66C] text-[#11161C]"
-                      : "border border-[#34414C] bg-[#141D26] text-[#9EACB8] hover:border-[#F5C66C]/35 hover:text-white"
+                  ${filter === item.value
+                    ? "bg-[#F5C66C] text-[#11161C]"
+                    : "border border-[#34414C] bg-[#141D26] text-[#9EACB8] hover:border-[#F5C66C]/35 hover:text-white"
                   }
                 `}
               >
@@ -1243,10 +1289,9 @@ export default function MatchesPage() {
                   <span
                     className={`
                       h-1.5 w-1.5 rounded-full
-                      ${
-                        filter === "live"
-                          ? "bg-[#11161C]"
-                          : "bg-[#EF6672]"
+                      ${filter === "live"
+                        ? "bg-[#11161C]"
+                        : "bg-[#EF6672]"
                       }
                     `}
                   />
@@ -1258,10 +1303,9 @@ export default function MatchesPage() {
                   className={`
                     rounded px-1.5 py-0.5
                     font-mono text-[10px]
-                    ${
-                      filter === item.value
-                        ? "bg-black/10"
-                        : "bg-white/[0.06]"
+                    ${filter === item.value
+                      ? "bg-black/10"
+                      : "bg-white/[0.06]"
                     }
                   `}
                 >
@@ -1304,6 +1348,19 @@ export default function MatchesPage() {
         <div className="mb-4 flex items-center justify-between gap-3">
           <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-[#8493A0]">
             Showing{" "}
+            <span className="font-bold text-[#F5C66C]">
+              {filteredMatches.length === 0
+                ? 0
+                : (currentPage - 1) * ITEMS_PER_PAGE + 1}
+            </span>
+            {" – "}
+            <span className="font-bold text-[#F5C66C]">
+              {Math.min(
+                currentPage * ITEMS_PER_PAGE,
+                filteredMatches.length
+              )}
+            </span>
+            {" of "}
             <span className="font-bold text-[#F5C66C]">
               {filteredMatches.length}
             </span>{" "}
@@ -1348,7 +1405,7 @@ export default function MatchesPage() {
         ===================================== */}
 
         {loading &&
-        matches.length === 0 ? (
+          matches.length === 0 ? (
           <div className="overflow-hidden rounded-xl border border-[#303C47] bg-[#121B24]">
             {[1, 2, 3, 4].map(
               (item) => (
@@ -1392,19 +1449,19 @@ export default function MatchesPage() {
 
             {(filter !== "all" ||
               search.trim()) && (
-              <button
-                type="button"
-                onClick={() => {
-                  setFilter("all");
-                  setSearch("");
-                }}
-                className="mt-6 inline-flex items-center gap-2 rounded-lg bg-[#F5C66C] px-5 py-3 text-xs font-extrabold text-[#11161C] transition hover:bg-[#FFDA91]"
-              >
-                Reset Filters
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFilter("all");
+                    setSearch("");
+                  }}
+                  className="mt-6 inline-flex items-center gap-2 rounded-lg bg-[#F5C66C] px-5 py-3 text-xs font-extrabold text-[#11161C] transition hover:bg-[#FFDA91]"
+                >
+                  Reset Filters
 
-                <ArrowRight size={14} />
-              </button>
-            )}
+                  <ArrowRight size={14} />
+                </button>
+              )}
           </div>
         ) : (
           /* =====================================
@@ -1433,25 +1490,122 @@ export default function MatchesPage() {
             </div>
 
             {/* Fixtures */}
+            {/* Fixtures */}
 
             <div>
-              {filteredMatches.map(
+              {paginatedMatches.map(
                 (match, index) => (
                   <FixtureStrip
                     key={match.id}
                     match={match}
-                    index={index}
+                    index={
+                      (currentPage - 1) *
+                      ITEMS_PER_PAGE +
+                      index
+                    }
                   />
                 )
               )}
             </div>
+
+            {/* Pagination */}
+
+            {totalPages > 1 && (
+              <div className="flex flex-col gap-4 border-t border-[#34414C] bg-[#101820] px-5 py-5 sm:flex-row sm:items-center sm:justify-between sm:px-6">
+
+                <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-[#8493A0]">
+                  Page{" "}
+                  <span className="font-bold text-[#F5C66C]">
+                    {currentPage}
+                  </span>{" "}
+                  of {totalPages}
+                </p>
+
+                <div className="flex flex-wrap items-center gap-2">
+
+                  {/* Previous */}
+                  <button
+                    type="button"
+                    disabled={currentPage === 1}
+                    onClick={() =>
+                      setCurrentPage((page) =>
+                        Math.max(1, page - 1)
+                      )
+                    }
+                    className="
+          inline-flex items-center gap-2 rounded-md
+          border border-[#34414C] bg-[#18212A]
+          px-3 py-2 text-xs font-bold text-[#B5C0C9]
+          transition
+          hover:border-[#F5C66C]/50
+          hover:text-[#F5C66C]
+          disabled:cursor-not-allowed
+          disabled:opacity-30
+        "
+                  >
+                    <ArrowLeft size={14} />
+                    Previous
+                  </button>
+
+                  {/* Page numbers */}
+                  {Array.from(
+                    { length: totalPages },
+                    (_, index) => index + 1
+                  ).map((page) => (
+                    <button
+                      key={page}
+                      type="button"
+                      onClick={() => setCurrentPage(page)}
+                      className={`
+            h-8 min-w-8 rounded-md px-2
+            font-mono text-xs font-bold
+            transition
+            ${currentPage === page
+                          ? "bg-[#F5C66C] text-[#11161C]"
+                          : "border border-[#34414C] bg-[#18212A] text-[#9EACB8] hover:border-[#F5C66C]/50 hover:text-white"
+                        }
+          `}
+                    >
+                      {page}
+                    </button>
+                  ))}
+
+                  {/* Next */}
+                  <button
+                    type="button"
+                    disabled={currentPage === totalPages}
+                    onClick={() =>
+                      setCurrentPage((page) =>
+                        Math.min(totalPages, page + 1)
+                      )
+                    }
+                    className="
+          inline-flex items-center gap-2 rounded-md
+          border border-[#34414C] bg-[#18212A]
+          px-3 py-2 text-xs font-bold text-[#B5C0C9]
+          transition
+          hover:border-[#F5C66C]/50
+          hover:text-[#F5C66C]
+          disabled:cursor-not-allowed
+          disabled:opacity-30
+        "
+                  >
+                    Next
+                    <ArrowRight size={14} />
+                  </button>
+
+                </div>
+              </div>
+            )}
+
           </div>
+
         )}
       </section>
 
-      {/* =====================================
+      {/* 
           CLOSING EDITORIAL BANNER
-      ===================================== */}
+      */}
 
       <section className="relative mt-4 isolate overflow-hidden border-t border-white/[0.08]">
 
