@@ -63,6 +63,13 @@ interface LiveMatch {
   status: "scheduled" | "live" | "finished";
   scheduled_at: string;
   venue: string;
+
+  started_at: string | null;
+  ended_at: string | null;
+  is_paused: boolean;
+  paused_at: string | null;
+  total_paused_seconds: number;
+  extra_time_minutes: number;
 }
 
 interface MatchUpdate {
@@ -72,6 +79,14 @@ interface MatchUpdate {
   status?: LiveMatch["status"];
   home_score?: number;
   away_score?: number;
+
+  started_at?: string | null;
+  ended_at?: string | null;
+  is_paused?: boolean;
+  paused_at?: string | null;
+  total_paused_seconds?: number;
+  extra_time_minutes?: number;
+
 }
 
 /* =========================================
@@ -147,6 +162,56 @@ function resolveLogo(logo: string | null): string | null {
   }
 }
 
+function getMatchClock(
+  match: LiveMatch,
+  now: number
+): string {
+  if (!match.started_at) {
+    return "00:00";
+  }
+
+  const started = new Date(
+    match.started_at
+  ).getTime();
+
+  let referenceTime = now;
+
+  if (match.is_paused && match.paused_at) {
+    referenceTime = new Date(
+      match.paused_at
+    ).getTime();
+  } else if (
+    match.status === "finished" &&
+    match.ended_at
+  ) {
+    referenceTime = new Date(
+      match.ended_at
+    ).getTime();
+  }
+
+  if (
+    !Number.isFinite(started) ||
+    !Number.isFinite(referenceTime)
+  ) {
+    return "00:00";
+  }
+
+  const elapsed = Math.max(
+    0,
+    Math.floor(
+      (referenceTime - started) / 1000
+    ) - (match.total_paused_seconds ?? 0)
+  );
+
+  const minutes = Math.floor(elapsed / 60);
+  const seconds = elapsed % 60;
+
+  return (
+    `${String(minutes).padStart(2, "0")}:` +
+    `${String(seconds).padStart(2, "0")}`
+  );
+}
+
 /* =========================================
    TEAM CREST
 ========================================= */
@@ -167,10 +232,9 @@ function TeamCrest({
         overflow-hidden border border-[#F5C66C]/25
         bg-[linear-gradient(145deg,#303640,#151E28)]
         font-heading font-extrabold tracking-tight text-[#F5C66C]
-        ${
-          large
-            ? "h-[72px] w-[72px] rounded-2xl text-lg sm:h-24 sm:w-24 sm:text-2xl"
-            : "h-12 w-12 rounded-xl text-xs sm:h-14 sm:w-14 sm:text-sm"
+        ${large
+          ? "h-[72px] w-[72px] rounded-2xl text-lg sm:h-24 sm:w-24 sm:text-2xl"
+          : "h-12 w-12 rounded-xl text-xs sm:h-14 sm:w-14 sm:text-sm"
         }
       `}
     >
@@ -194,8 +258,10 @@ function TeamCrest({
 
 function FeaturedBroadcast({
   match,
+  clockNow,
 }: {
   match: LiveMatch;
+  clockNow: number;
 }) {
   return (
     <Link
@@ -238,12 +304,29 @@ function FeaturedBroadcast({
               Featured Live Broadcast
             </span>
           </div>
-
+          {/* 
           <span className="inline-flex items-center gap-2 rounded-md border border-[#EF6672]/40 bg-[#EF6672]/10 px-3 py-1.5 text-[10px] font-extrabold tracking-[0.15em] text-[#FF818A]">
             <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#EF6672]" />
 
             LIVE NOW
+          </span> */}
+
+          <span
+            className={`inline-flex items-center gap-2 rounded-md border px-3 py-1.5 text-[10px] font-extrabold tracking-[0.15em] ${match.is_paused
+              ? "border-[#F5C66C]/40 bg-[#F5C66C]/10 text-[#F5C66C]"
+              : "border-[#EF6672]/40 bg-[#EF6672]/10 text-[#FF818A]"
+              }`}
+          >
+            <span
+              className={`h-1.5 w-1.5 rounded-full ${match.is_paused
+                ? "bg-[#F5C66C]"
+                : "animate-pulse bg-[#EF6672]"
+                }`}
+            />
+
+            {match.is_paused ? "MATCH PAUSED" : "LIVE NOW"}
           </span>
+
         </div>
 
         {/* Match number */}
@@ -290,11 +373,39 @@ function FeaturedBroadcast({
               </span>
             </div>
 
-            <div className="mt-5 inline-flex items-center gap-2 border-y border-[#EF6672]/30 py-2 text-[10px] font-extrabold uppercase tracking-[0.18em] text-[#FF818A]">
+            {/* <div className="mt-5 inline-flex items-center gap-2 border-y border-[#EF6672]/30 py-2 text-[10px] font-extrabold uppercase tracking-[0.18em] text-[#FF818A]">
               <Activity size={12} />
 
               In Play
+            </div> */}
+
+            <div className="mt-5 flex flex-col items-center gap-2">
+              <div
+                className={`inline-flex items-center gap-2 border-y py-2 text-[10px] font-extrabold uppercase tracking-[0.18em] ${match.is_paused
+                  ? "border-[#F5C66C]/40 text-[#F5C66C]"
+                  : "border-[#EF6672]/30 text-[#FF818A]"
+                  }`}
+              >
+                <Activity size={12} />
+
+                {match.is_paused ? "Match Paused" : "In Play"}
+              </div>
+
+              <div className="flex items-center justify-center gap-3">
+                <Clock3 size={15} className="text-[#F5C66C]" />
+
+                <span className="font-mono text-xl font-extrabold tabular-nums text-white">
+                  {getMatchClock(match, clockNow)}
+                </span>
+
+                {match.extra_time_minutes > 0 && (
+                  <span className="font-mono text-sm font-bold text-[#F5C66C]">
+                    +{match.extra_time_minutes}&apos;
+                  </span>
+                )}
+              </div>
             </div>
+
           </div>
 
           {/* Away team */}
@@ -343,16 +454,16 @@ function FeaturedBroadcast({
   );
 }
 
-/* =========================================
-   COMPACT LIVE MATCH ROW
-========================================= */
+/*   COMPACT LIVE MATCH ROW */
 
 function LiveMatchRow({
   match,
   index,
+  clockNow,
 }: {
   match: LiveMatch;
   index: number;
+  clockNow: number;
 }) {
   return (
     <Link
@@ -373,11 +484,28 @@ function LiveMatchRow({
             {String(index + 1).padStart(2, "0")}
           </span>
 
-          <span className="flex items-center gap-1.5 text-[10px] font-extrabold uppercase tracking-[0.13em] text-[#FF818A]">
+          {/* <span className="flex items-center gap-1.5 text-[10px] font-extrabold uppercase tracking-[0.13em] text-[#FF818A]">
             <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#EF6672]" />
 
             Live
+          </span> */}
+
+          <span
+            className={`flex items-center gap-1.5 text-[10px] font-extrabold uppercase tracking-[0.13em] ${match.is_paused
+              ? "text-[#F5C66C]"
+              : "text-[#FF818A]"
+              }`}
+          >
+            <span
+              className={`h-1.5 w-1.5 rounded-full ${match.is_paused
+                ? "bg-[#F5C66C]"
+                : "animate-pulse bg-[#EF6672]"
+                }`}
+            />
+
+            {match.is_paused ? "Paused" : "Live"}
           </span>
+
 
           <span className="text-[10px] text-[#81909D]">
             Round {match.round}
@@ -417,9 +545,31 @@ function LiveMatchRow({
             {match.away_score}
           </p>
 
-          <p className="mt-1 text-[9px] font-extrabold tracking-[0.15em] text-[#FF818A]">
+          {/* <p className="mt-1 text-[9px] font-extrabold tracking-[0.15em] text-[#FF818A]">
             IN PLAY
-          </p>
+          </p> */}
+
+          <div className="mt-2 flex flex-wrap items-center justify-center gap-2">
+            <span
+              className={`text-[9px] font-extrabold tracking-[0.15em] ${match.is_paused
+                ? "text-[#F5C66C]"
+                : "text-[#FF818A]"
+                }`}
+            >
+              {match.is_paused ? "PAUSED" : "IN PLAY"}
+            </span>
+
+            <span className="font-mono text-[11px] font-bold tabular-nums text-white">
+              {getMatchClock(match, clockNow)}
+            </span>
+
+            {match.extra_time_minutes > 0 && (
+              <span className="font-mono text-[10px] font-bold text-[#F5C66C]">
+                +{match.extra_time_minutes}&apos;
+              </span>
+            )}
+          </div>
+
         </div>
 
         <div className="flex min-w-0 items-center justify-end gap-2 text-right sm:gap-3">
@@ -467,6 +617,18 @@ function LiveMatchRow({
 
 export default function LiveScoreboardPage() {
   const [matches, setMatches] = useState<LiveMatch[]>([]);
+
+  const [clockNow, setClockNow] = useState(
+    () => Date.now()
+  );
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setClockNow(Date.now());
+    }, 1000);
+
+    return () => window.clearInterval(timer);
+  }, []);
 
   const [loading, setLoading] = useState(true);
 
@@ -639,6 +801,23 @@ export default function LiveScoreboardPage() {
             waiting for an additional HTTP request.
           */
 
+          // setMatches((current) =>
+          //   current.map((match) => {
+          //     if (match.id !== matchId) {
+          //       return match;
+          //     }
+
+          //     return {
+          //       ...match,
+          //       status: data.status ?? match.status,
+          //       home_score:
+          //         data.home_score ?? match.home_score,
+          //       away_score:
+          //         data.away_score ?? match.away_score,
+          //     };
+          //   })
+          // );
+
           setMatches((current) =>
             current.map((match) => {
               if (match.id !== matchId) {
@@ -647,14 +826,44 @@ export default function LiveScoreboardPage() {
 
               return {
                 ...match,
+
                 status: data.status ?? match.status,
+
                 home_score:
                   data.home_score ?? match.home_score,
+
                 away_score:
                   data.away_score ?? match.away_score,
+
+                started_at:
+                  data.started_at !== undefined
+                    ? data.started_at
+                    : match.started_at,
+
+                ended_at:
+                  data.ended_at !== undefined
+                    ? data.ended_at
+                    : match.ended_at,
+
+                is_paused:
+                  data.is_paused ?? match.is_paused,
+
+                paused_at:
+                  data.paused_at !== undefined
+                    ? data.paused_at
+                    : match.paused_at,
+
+                total_paused_seconds:
+                  data.total_paused_seconds ??
+                  match.total_paused_seconds,
+
+                extra_time_minutes:
+                  data.extra_time_minutes ??
+                  match.extra_time_minutes,
               };
             })
           );
+
 
           /*
             Also synchronize with the authoritative API.
@@ -741,8 +950,8 @@ export default function LiveScoreboardPage() {
 
   const otherMatches = featuredMatch
     ? sortedMatches.filter(
-        (match) => match.id !== featuredMatch.id
-      )
+      (match) => match.id !== featuredMatch.id
+    )
     : [];
 
   const totalGoals = matches.reduce(
@@ -816,10 +1025,9 @@ export default function LiveScoreboardPage() {
                 className={`
                   inline-flex items-center gap-2 rounded-md
                   border px-3 py-2 text-[10px] font-bold
-                  ${
-                    socketConnected
-                      ? "border-[#F5C66C]/35 bg-[#F5C66C]/10 text-[#F5C66C]"
-                      : "border-white/15 bg-black/30 text-[#B0BBC5]"
+                  ${socketConnected
+                    ? "border-[#F5C66C]/35 bg-[#F5C66C]/10 text-[#F5C66C]"
+                    : "border-white/15 bg-black/30 text-[#B0BBC5]"
                   }
                 `}
               >
@@ -951,15 +1159,13 @@ export default function LiveScoreboardPage() {
                 key={item.label}
                 className={`
                   flex items-center gap-4 py-5
-                  ${
-                    index > 0
-                      ? "sm:border-l sm:border-white/[0.08] sm:pl-6"
-                      : ""
+                  ${index > 0
+                    ? "sm:border-l sm:border-white/[0.08] sm:pl-6"
+                    : ""
                   }
-                  ${
-                    index >= 2
-                      ? "border-t border-white/[0.08] sm:border-t-0"
-                      : ""
+                  ${index >= 2
+                    ? "border-t border-white/[0.08] sm:border-t-0"
+                    : ""
                   }
                 `}
               >
@@ -1132,6 +1338,7 @@ export default function LiveScoreboardPage() {
               {featuredMatch && (
                 <FeaturedBroadcast
                   match={featuredMatch}
+                  clockNow={clockNow}
                 />
               )}
 
@@ -1191,18 +1398,44 @@ export default function LiveScoreboardPage() {
                     key={match.id}
                     className="group block px-5 py-4 transition hover:bg-[#F5C66C]/[0.04]"
                   >
-                    <div className="mb-3 flex items-center justify-between">
-                      <span className="flex items-center gap-1.5 text-[9px] font-extrabold uppercase tracking-[0.13em] text-[#FF818A]">
-                        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#EF6672]" />
+                    {/* MATCH STATUS AND NUMBER */}
+                    <div className="mb-3 flex items-center justify-between gap-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span
+                          className={`flex items-center gap-1.5 text-[9px] font-extrabold uppercase tracking-[0.13em] ${match.is_paused
+                              ? "text-[#F5C66C]"
+                              : "text-[#FF818A]"
+                            }`}
+                        >
+                          <span
+                            className={`h-1.5 w-1.5 rounded-full ${match.is_paused
+                                ? "bg-[#F5C66C]"
+                                : "animate-pulse bg-[#EF6672]"
+                              }`}
+                          />
 
-                        LIVE
-                      </span>
+                          {match.is_paused ? "PAUSED" : "LIVE"}
+                        </span>
 
-                      <span className="font-mono text-[10px] text-[#7E8D9B]">
+                        {/* LIVE MATCH CLOCK */}
+                        <span className="font-mono text-[10px] font-semibold tabular-nums text-[#AAB8C3]">
+                          {getMatchClock(match, clockNow)}
+                        </span>
+
+                        {/* EXTRA TIME */}
+                        {match.extra_time_minutes > 0 && (
+                          <span className="rounded bg-[#F5C66C]/10 px-1.5 py-0.5 font-mono text-[10px] font-bold text-[#F5C66C]">
+                            +{match.extra_time_minutes}&apos;
+                          </span>
+                        )}
+                      </div>
+
+                      <span className="shrink-0 font-mono text-[10px] text-[#7E8D9B]">
                         #{match.id}
                       </span>
                     </div>
 
+                    {/* TEAMS AND SCORES */}
                     <div className="flex items-center justify-between gap-3">
                       <div className="min-w-0 space-y-2.5">
                         <p className="truncate text-xs font-semibold text-white">
@@ -1228,6 +1461,7 @@ export default function LiveScoreboardPage() {
                   </Link>
                 ))}
               </div>
+
 
               {/* Sidebar footer */}
 
@@ -1271,6 +1505,7 @@ export default function LiveScoreboardPage() {
                   key={match.id}
                   match={match}
                   index={index}
+                  clockNow={clockNow}
                 />
               ))}
             </div>

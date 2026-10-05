@@ -11,6 +11,15 @@ from .models import Event, EventTeam, Match, MatchEvent, Player, Team
 def broadcast_match_update(match, event_type, event=None):
     channel_layer = get_channel_layer()
 
+    # data = {
+    #     "type": "match_update",
+    #     "event": event_type,
+    #     "match_id": match.id,
+    #     "status": match.status,
+    #     "home_score": match.home_score,
+    #     "away_score": match.away_score,
+    # }
+    
     data = {
         "type": "match_update",
         "event": event_type,
@@ -18,7 +27,64 @@ def broadcast_match_update(match, event_type, event=None):
         "status": match.status,
         "home_score": match.home_score,
         "away_score": match.away_score,
+
+        # Advanced match controls
+        "is_paused": match.is_paused,
+        "paused_at": (
+            match.paused_at.isoformat()
+            if match.paused_at
+            else None
+        ),
+        "total_paused_seconds": match.total_paused_seconds,
+        "extra_time_minutes": match.extra_time_minutes,
+
+        # Football match lifecycle
+        "phase": match.phase,
+
+        "clock_seconds": get_match_clock_seconds(match),
+
+        "first_half_stoppage_minutes": (
+            match.first_half_stoppage_minutes
+        ),
+
+        "second_half_stoppage_minutes": (
+            match.second_half_stoppage_minutes
+        ),
+
+        "first_half_elapsed_seconds": (
+            match.first_half_elapsed_seconds
+        ),
+
+        "first_half_ended_at": (
+            match.first_half_ended_at.isoformat()
+            if match.first_half_ended_at
+            else None
+        ),
+
+
+      "second_half_started_at": (
+    match.second_half_started_at.isoformat()
+    if match.second_half_started_at
+    else None
+),
+
+# Needed by the frontend to calculate second-half pause duration
+"second_half_pause_baseline_seconds": (
+    match.second_half_pause_baseline_seconds
+),
+
+"started_at": (
+    match.started_at.isoformat()
+    if match.started_at
+    else None
+),
+        "ended_at": (
+            match.ended_at.isoformat()
+            if match.ended_at
+            else None
+        ),
     }
+
 
     if event is not None:
         data["match_event"] = {
@@ -50,6 +116,161 @@ def broadcast_match_update(match, event_type, event=None):
         },
     )
 
+
+def get_match_clock_seconds(match, at_time=None):
+    """
+    Return football playing time in seconds.
+
+    Half-time and temporary match suspensions
+    are excluded from the playing clock.
+    """
+    now = at_time or timezone.now()
+
+    if (
+        match.status == Match.Status.SCHEDULED
+        or not match.started_at
+    ):
+        return 0
+
+    if match.phase == Match.Phase.HALF_TIME:
+        return match.first_half_elapsed_seconds
+
+    if match.phase == Match.Phase.FULL_TIME:
+      return get_finished_clock_seconds(match)
+    if match.phase == Match.Phase.FIRST_HALF:
+        reference_time = (
+            match.paused_at
+            if match.is_paused and match.paused_at
+            else now
+        )
+
+        elapsed = (
+            reference_time - match.started_at
+        ).total_seconds()
+
+        return max(
+            0,
+            int(elapsed) - match.total_paused_seconds,
+        )
+
+    if match.phase in (
+        Match.Phase.SECOND_HALF,
+        Match.Phase.REGULATION_ENDED,
+    ):
+        if not match.second_half_started_at:
+            return 45 * 60
+
+        reference_time = (
+            match.paused_at
+            if match.is_paused and match.paused_at
+            else now
+        )
+
+        elapsed = (
+            reference_time - match.second_half_started_at
+        ).total_seconds()
+
+        second_half_pauses = max(
+            0,
+            match.total_paused_seconds
+            - match.second_half_pause_baseline_seconds,
+        )
+
+        return (45 * 60) + max(
+            0,
+            int(elapsed) - second_half_pauses,
+        )
+
+    return 0
+
+
+def get_finished_clock_seconds(match):
+    """
+    Calculate the frozen clock after the final whistle.
+    """
+    if not match.ended_at:
+        return 0
+
+    if not match.second_half_started_at:
+        return match.first_half_elapsed_seconds
+
+    elapsed = (
+        match.ended_at - match.second_half_started_at
+    ).total_seconds()
+
+    second_half_pauses = max(
+        0,
+        match.total_paused_seconds
+        - match.second_half_pause_baseline_seconds,
+    )
+
+    return (45 * 60) + max(
+        0,
+        int(elapsed) - second_half_pauses,
+    )
+
+
+
+def create_system_commentary(
+    match,
+    event_type,
+    note="",
+    at_time=None,
+    minute_override=None,
+):
+    """
+    Persist a match-wide commentary announcement.
+    System events do not belong to either team.
+    """
+
+    if minute_override is not None:
+        minute = minute_override
+    else:
+        elapsed_seconds = get_match_clock_seconds(
+            match,
+            at_time=at_time,
+        )
+
+        minute = elapsed_seconds // 60
+
+    return MatchEvent.objects.create(
+        match=match,
+        team=None,
+        player=None,
+        type=event_type,
+        player_name="",
+        minute=minute,
+        points=0,
+        note=note,
+    )
+
+   
+
+def validate_active_play(match):
+    """
+    Allow football actions only during an active playing half.
+    """
+
+    if match.status != Match.Status.LIVE:
+        raise ValidationError(
+            "This action requires a live match."
+        )
+
+    if match.phase not in (
+        Match.Phase.FIRST_HALF,
+        Match.Phase.SECOND_HALF,
+    ):
+        raise ValidationError(
+            "Football actions are not allowed during "
+            f"the {match.get_phase_display()} phase."
+        )
+
+    if match.is_paused:
+        raise ValidationError(
+            "The match is currently paused."
+        )
+
+
 @transaction.atomic
 def start_match(match_id):
     match = (
@@ -73,25 +294,400 @@ def start_match(match_id):
             "The event must be active before a match can start."
         )
 
+    
     match.status = Match.Status.LIVE
+    match.phase = Match.Phase.FIRST_HALF
     match.started_at = timezone.now()
+
 
     match.save(
         update_fields=[
             "status",
+             "phase",
             "started_at",
         ]
+    )
+
+    # transaction.on_commit(
+    #     lambda: broadcast_match_update(
+    #         match,
+    #         "match_started",
+    #     )
+    # )
+    commentary = create_system_commentary(
+        match=match,
+        event_type=MatchEvent.EventType.MATCH_STARTED,
+        note="The referee blows the whistle. Match kicked off!",
+        at_time=match.started_at,
     )
 
     transaction.on_commit(
         lambda: broadcast_match_update(
             match,
             "match_started",
+            commentary,
         )
     )
 
     return match
 
+
+@transaction.atomic
+def end_first_half(match_id):
+    """
+    End the first half and freeze the football clock.
+    """
+
+    match = (
+        Match.objects
+        .select_for_update()
+        .get(pk=match_id)
+    )
+
+    if match.status != Match.Status.LIVE:
+        raise ValidationError(
+            "Only live matches can enter half-time."
+        )
+
+    if match.phase != Match.Phase.FIRST_HALF:
+        raise ValidationError(
+            "The match is not currently in its first half."
+        )
+
+    if match.is_paused:
+        raise ValidationError(
+            "Resume the match before ending the first half."
+        )
+
+    now = timezone.now()
+
+    elapsed_seconds = get_match_clock_seconds(
+        match,
+        at_time=now,
+    )
+
+    match.first_half_elapsed_seconds = elapsed_seconds
+    match.first_half_ended_at = now
+    match.phase = Match.Phase.HALF_TIME
+
+    match.save(
+        update_fields=[
+            "first_half_elapsed_seconds",
+            "first_half_ended_at",
+            "phase",
+        ]
+    )
+
+    minute = elapsed_seconds // 60
+
+    commentary = create_system_commentary(
+        match=match,
+        event_type=MatchEvent.EventType.HALF_TIME,
+        note="The referee blows the half-time whistle.",
+        minute_override=minute,
+    )
+
+    transaction.on_commit(
+        lambda: broadcast_match_update(
+            match,
+            "half_time",
+            commentary,
+        )
+    )
+
+    return match
+
+
+@transaction.atomic
+def start_second_half(match_id):
+    """
+    Resume football from 45:00 after half-time.
+    """
+
+    match = (
+        Match.objects
+        .select_for_update()
+        .get(pk=match_id)
+    )
+
+    if match.status != Match.Status.LIVE:
+        raise ValidationError(
+            "Only live matches can start the second half."
+        )
+
+    if match.phase != Match.Phase.HALF_TIME:
+        raise ValidationError(
+            "The match must be at half-time first."
+        )
+
+    now = timezone.now()
+
+    match.phase = Match.Phase.SECOND_HALF
+    match.second_half_started_at = now
+
+    match.second_half_pause_baseline_seconds = (
+        match.total_paused_seconds
+    )
+   # Clear the first half's legacy additional-time display.
+   # The first-half stoppage field remains preserved.
+    match.extra_time_minutes = 0
+    match.save(
+        update_fields=[
+            "phase",
+            "second_half_started_at",
+            "second_half_pause_baseline_seconds",
+            "extra_time_minutes",
+        ]
+    )
+
+    commentary = create_system_commentary(
+        match=match,
+        event_type=MatchEvent.EventType.SECOND_HALF_STARTED,
+        note="The referee starts the second half.",
+        minute_override=45,
+    )
+
+    transaction.on_commit(
+        lambda: broadcast_match_update(
+            match,
+            "second_half_started",
+            commentary,
+        )
+    )
+
+    return match
+
+
+
+@transaction.atomic
+def pause_match(match_id):
+    match = (
+        Match.objects
+        .select_for_update()
+        .get(pk=match_id)
+    )
+
+    
+    if match.status != Match.Status.LIVE:
+        raise ValidationError(
+            "Only live matches can be paused."
+        )
+
+    if match.phase not in (
+        Match.Phase.FIRST_HALF,
+        Match.Phase.SECOND_HALF,
+    ):
+        raise ValidationError(
+            "Only an active playing half can be paused."
+        )
+
+    if match.is_paused:
+       raise ValidationError(
+        "This match is already paused."
+    )
+    match.is_paused = True
+    match.paused_at = timezone.now()
+
+    match.save(
+        update_fields=[
+            "is_paused",
+            "paused_at",
+        ]
+    )
+    commentary = create_system_commentary(
+        match=match,
+        event_type=MatchEvent.EventType.MATCH_PAUSED,
+        note="The match has been temporarily paused.",
+        at_time=match.paused_at,
+    )
+
+    transaction.on_commit(
+        lambda: broadcast_match_update(
+            match,
+            "match_paused",
+            commentary,
+        )
+    )
+
+    return match
+
+
+@transaction.atomic
+def resume_match(match_id):
+    match = (
+        Match.objects
+        .select_for_update()
+        .get(pk=match_id)
+    )
+
+    if match.status != Match.Status.LIVE:
+        raise ValidationError(
+            "Only live matches can be resumed."
+        )
+   
+    if match.phase not in (
+        Match.Phase.FIRST_HALF,
+        Match.Phase.SECOND_HALF,
+    ):
+        raise ValidationError(
+            "Only a temporarily paused playing half "
+            "can be resumed."
+        )
+
+
+    if not match.is_paused or match.paused_at is None:
+        raise ValidationError(
+            "This match is not currently paused."
+        )
+
+    now = timezone.now()
+
+    paused_duration = max(
+        0,
+        int((now - match.paused_at).total_seconds()),
+    )
+
+    match.total_paused_seconds += paused_duration
+    match.is_paused = False
+    match.paused_at = None
+
+    match.save(
+        update_fields=[
+            "total_paused_seconds",
+            "is_paused",
+            "paused_at",
+        ]
+    )
+
+    # transaction.on_commit(
+    #     lambda: broadcast_match_update(
+    #         match,
+    #         "match_resumed",
+    #     )
+    # )
+    commentary = create_system_commentary(
+        match=match,
+        event_type=MatchEvent.EventType.MATCH_RESUMED,
+        note="The referee signals for play to resume.",
+        at_time=now,
+    )
+
+    transaction.on_commit(
+        lambda: broadcast_match_update(
+            match,
+            "match_resumed",
+            commentary,
+        )
+    )
+
+    return match
+
+
+@transaction.atomic
+def set_extra_time(match_id, minutes):
+    """
+    Set stoppage time for the currently active half.
+
+    This is football stoppage time (+2, +4, etc.),
+    NOT knockout extra time (the additional 30 minutes).
+    """
+
+    match = (
+        Match.objects
+        .select_for_update()
+        .get(pk=match_id)
+    )
+
+    if match.status != Match.Status.LIVE:
+        raise ValidationError(
+            "Additional time can only be configured for live matches."
+        )
+
+    if match.phase not in (
+        Match.Phase.FIRST_HALF,
+        Match.Phase.SECOND_HALF,
+    ):
+        raise ValidationError(
+            "Additional time can only be configured "
+            "during an active playing half."
+        )
+
+    if match.is_paused:
+        raise ValidationError(
+            "Resume the match before changing additional time."
+        )
+
+    if isinstance(minutes, bool):
+        raise ValidationError(
+            "Additional time must be a valid integer."
+        )
+
+    try:
+        minutes = int(minutes)
+    except (TypeError, ValueError, OverflowError):
+        raise ValidationError(
+            "Additional time must be a valid integer."
+        )
+
+    if minutes < 0 or minutes > 30:
+        raise ValidationError(
+            "Additional time must be between 0 and 30 minutes."
+        )
+
+    # Determine which half receives the stoppage time.
+    if match.phase == Match.Phase.FIRST_HALF:
+        stoppage_field = "first_half_stoppage_minutes"
+        half_name = "first half"
+    else:
+        stoppage_field = "second_half_stoppage_minutes"
+        half_name = "second half"
+
+    current_minutes = getattr(match, stoppage_field)
+
+    # Avoid duplicate announcements.
+    if current_minutes == minutes:
+        return match
+
+    # Update the correct half.
+    setattr(match, stoppage_field, minutes)
+
+    # Preserve the original field for backward compatibility
+    # with existing Admin/scoreboard components.
+    match.extra_time_minutes = minutes
+
+    match.save(
+        update_fields=[
+            stoppage_field,
+            "extra_time_minutes",
+        ]
+    )
+
+    if minutes == 0:
+        note = (
+            f"Previously announced {half_name} "
+            "additional time has been cancelled."
+        )
+    else:
+        note = (
+            f"+{minutes} minutes of additional time "
+            f"announced for the {half_name}."
+        )
+
+    commentary = create_system_commentary(
+        match=match,
+        event_type=MatchEvent.EventType.EXTRA_TIME,
+        note=note,
+    )
+
+    transaction.on_commit(
+        lambda: broadcast_match_update(
+            match,
+            "extra_time_updated",
+            commentary,
+        )
+    )
+
+    return match
 
 @transaction.atomic
 def finish_match(match_id):
@@ -106,30 +702,64 @@ def finish_match(match_id):
         .get(pk=match_id)
     )
 
+    # Only live matches can be finished.
     if match.status != Match.Status.LIVE:
         raise ValidationError(
             "Only live matches can be finished."
         )
 
+    # NeW Prevent finishing a paused match.
+    if match.is_paused:
+        raise ValidationError(
+            "Resume the match before finishing it."
+        )
+
+
+    if match.phase not in (
+        Match.Phase.SECOND_HALF,
+        Match.Phase.REGULATION_ENDED,
+    ):
+        raise ValidationError(
+            "The match cannot be finished before "
+            "the second half."
+        )
+
+
+    # Finish the match.
     match.status = Match.Status.FINISHED
+    match.phase = Match.Phase.FULL_TIME
     match.ended_at = timezone.now()
 
     match.save(
         update_fields=[
             "status",
+            "phase",
             "ended_at",
         ]
+    )
+
+    # Notify connected WebSocket clients.
+    # transaction.on_commit(
+    #     lambda: broadcast_match_update(
+    #         match,
+    #         "match_finished",
+    #     )
+    # )
+    commentary = create_system_commentary(
+        match=match,
+        event_type=MatchEvent.EventType.MATCH_FINISHED,
+        note="The referee blows the final whistle. Full time!",
+        at_time=match.ended_at,
     )
 
     transaction.on_commit(
         lambda: broadcast_match_update(
             match,
             "match_finished",
+            commentary,
         )
     )
-
     return match
-
 
 
 @transaction.atomic
@@ -148,11 +778,18 @@ def record_goal(
         .get(pk=match_id)
     )
 
-    if match.status != Match.Status.LIVE:
-        raise ValidationError(
-            "Goals can only be recorded for live matches."
-        )
+    # if match.status != Match.Status.LIVE:
+    #     raise ValidationError(
+    #         "Goals can only be recorded for live matches."
+    #     )
 
+    # # NEW: Prevent recording goals while the match is paused.
+    # if match.is_paused:
+    #     raise ValidationError(
+    #         "Goals cannot be recorded while the match is paused."
+    #     )
+    validate_active_play(match)
+    minute = get_match_clock_seconds(match) // 60
     try:
         team_id = int(team_id)
         minute = int(minute)
@@ -246,18 +883,16 @@ def record_match_event(
     player_name="",
     points=0,
     note="",
+    player_id=None,
 ):
     match = (
         Match.objects
         .select_for_update()
         .get(pk=match_id)
     )
-
-    if match.status != Match.Status.LIVE:
-        raise ValidationError(
-            "Match events can only be recorded for live matches."
-        )
-
+    
+    validate_active_play(match)
+    minute = get_match_clock_seconds(match) // 60
     if team_id not in (
         match.home_team_id,
         match.away_team_id,

@@ -74,12 +74,42 @@ class MatchEventSerializer(serializers.ModelSerializer):
         ]
 
 
+
+#     home_team = TeamSerializer(read_only=True)
+#     away_team = TeamSerializer(read_only=True)
+
+#     class Meta:
+#         model = Match
+#         fields = [
+#             "id",
+#             "home_team",
+#             "away_team",
+#             "scheduled_at",
+#             "venue",
+#             "status",
+#             "started_at",
+#             "ended_at",
+#             "home_score",
+#             "away_score",
+#         ]
+
+
 class MatchSerializer(serializers.ModelSerializer):
     home_team = TeamSerializer(read_only=True)
     away_team = TeamSerializer(read_only=True)
 
+    # Authoritative football clock
+    elapsed_seconds = serializers.SerializerMethodField()
+    clock_seconds = serializers.SerializerMethodField()
+
+    phase_display = serializers.CharField(
+        source="get_phase_display",
+        read_only=True,
+    )
+
     class Meta:
         model = Match
+
         fields = [
             "id",
             "home_team",
@@ -87,11 +117,45 @@ class MatchSerializer(serializers.ModelSerializer):
             "scheduled_at",
             "venue",
             "status",
+            "phase",
+            "phase_display",
             "started_at",
             "ended_at",
             "home_score",
             "away_score",
+
+            # Existing advanced match controls
+            "is_paused",
+            "paused_at",
+            "total_paused_seconds",
+            "extra_time_minutes",
+
+            # Football lifecycle
+            "first_half_ended_at",
+            "first_half_elapsed_seconds",
+            "first_half_stoppage_minutes",
+            "second_half_started_at",
+            "second_half_stoppage_minutes",
+            "second_half_pause_baseline_seconds",
+
+            # Computed clock
+            "elapsed_seconds",
+            "clock_seconds",
         ]
+
+    def get_clock_seconds(self, obj):
+        from .services import get_match_clock_seconds
+
+        return get_match_clock_seconds(obj)
+
+    def get_elapsed_seconds(self, obj):
+        """
+        Backward-compatible field.
+
+        Existing frontend components using elapsed_seconds
+        will continue to receive the football clock.
+        """
+        return self.get_clock_seconds(obj)
 
 
 class RoundSerializer(serializers.ModelSerializer):
@@ -241,58 +305,113 @@ class AdminRoundSerializer(serializers.ModelSerializer):
         ]
 
 
+
 class AdminMatchSerializer(serializers.ModelSerializer):
+
+    phase_display = serializers.CharField(
+        source="get_phase_display",
+        read_only=True,
+    )
+
+    clock_seconds = serializers.SerializerMethodField()
+
     class Meta:
         model = Match
+
         fields = [
-             "id",
-    "round",
-    "home_team",
-    "away_team",
-    "scheduled_at",
-    "venue",
-    "status",
-    "started_at",
-    "ended_at",
-    "home_score",
-    "away_score",
+            "id",
+            "round",
+            "home_team",
+            "away_team",
+            "scheduled_at",
+            "venue",
+            "status",
+            "phase",
+            "phase_display",
+            "started_at",
+            "ended_at",
+            "home_score",
+            "away_score",
+
+            # Existing controls
+            "is_paused",
+            "paused_at",
+            "total_paused_seconds",
+            "extra_time_minutes",
+
+            # Football lifecycle
+            "first_half_ended_at",
+            "first_half_elapsed_seconds",
+            "first_half_stoppage_minutes",
+            "second_half_started_at",
+            "second_half_stoppage_minutes",
+            "second_half_pause_baseline_seconds",
+
+            # Read-only computed clock
+            "clock_seconds",
         ]
 
+        read_only_fields = [
+            "status",
+            "phase",
+            "phase_display",
+            "started_at",
+            "ended_at",
+            "home_score",
+            "away_score",
+            "is_paused",
+            "paused_at",
+            "total_paused_seconds",
+            "extra_time_minutes",
+            "first_half_ended_at",
+            "first_half_elapsed_seconds",
+            "first_half_stoppage_minutes",
+            "second_half_started_at",
+            "second_half_stoppage_minutes",
+            "second_half_pause_baseline_seconds",
+            "clock_seconds",
+        ]
+
+    def get_clock_seconds(self, obj):
+        from .services import get_match_clock_seconds
+
+        return get_match_clock_seconds(obj)
+
     def validate(self, attrs):
-      from .services import validate_match_teams
+        from .services import validate_match_teams
 
-      round_obj = attrs.get(
-        "round",
-        self.instance.round if self.instance else None,
-     )
-
-      home_team = attrs.get(
-        "home_team",
-        self.instance.home_team if self.instance else None,
-      )
-
-      away_team = attrs.get(
-        "away_team",
-        self.instance.away_team if self.instance else None,
-    )
-
-      if not round_obj or not home_team or not away_team:
-        raise serializers.ValidationError(
-            "Round and both teams are required."
+        round_obj = attrs.get(
+            "round",
+            self.instance.round if self.instance else None,
         )
 
-      validate_match_teams(
-        round_id=round_obj.id,
-        home_team_id=home_team.id,
-        away_team_id=away_team.id,
-        exclude_match_id=(
-            self.instance.id
-            if self.instance
-            else None
-        ),
-    )
+        home_team = attrs.get(
+            "home_team",
+            self.instance.home_team if self.instance else None,
+        )
 
-      return attrs
+        away_team = attrs.get(
+            "away_team",
+            self.instance.away_team if self.instance else None,
+        )
+
+        if not round_obj or not home_team or not away_team:
+            raise serializers.ValidationError(
+                "Round and both teams are required."
+            )
+
+        validate_match_teams(
+            round_id=round_obj.id,
+            home_team_id=home_team.id,
+            away_team_id=away_team.id,
+            exclude_match_id=(
+                self.instance.id
+                if self.instance
+                else None
+            ),
+        )
+
+        return attrs
 
 
 class AdminEventTeamSerializer(serializers.Serializer):

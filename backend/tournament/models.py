@@ -146,11 +146,21 @@ class Round(models.Model):
         return f"{self.event.name} - {self.name}"
 
 
+
+
 class Match(models.Model):
     class Status(models.TextChoices):
         SCHEDULED = "scheduled", "Scheduled"
         LIVE = "live", "Live"
         FINISHED = "finished", "Finished"
+    
+    class Phase(models.TextChoices):
+        NOT_STARTED = "not_started", "Not Started"
+        FIRST_HALF = "first_half", "First Half"
+        HALF_TIME = "half_time", "Half Time"
+        SECOND_HALF = "second_half", "Second Half"
+        REGULATION_ENDED = "regulation_ended", "Regulation Ended"
+        FULL_TIME = "full_time", "Full Time"
 
     round = models.ForeignKey(
         Round,
@@ -196,6 +206,57 @@ class Match(models.Model):
     home_score = models.PositiveIntegerField(default=0)
     away_score = models.PositiveIntegerField(default=0)
 
+    # Advanced match controls
+    is_paused = models.BooleanField(default=False)
+
+    paused_at = models.DateTimeField(
+        null=True,
+        blank=True,
+    )
+
+    total_paused_seconds = models.PositiveIntegerField(default=0)
+
+    extra_time_minutes = models.PositiveSmallIntegerField(default=0)
+
+
+    # Football match lifecycle
+    phase = models.CharField(
+        max_length=25,
+        choices=Phase.choices,
+        default=Phase.NOT_STARTED,
+    )
+
+    # First-half tracking
+    first_half_ended_at = models.DateTimeField(
+        null=True,
+        blank=True,
+    )
+
+    first_half_elapsed_seconds = models.PositiveIntegerField(
+        default=0,
+    )
+
+    first_half_stoppage_minutes = models.PositiveSmallIntegerField(
+        default=0,
+    )
+
+    # Second-half tracking
+    second_half_started_at = models.DateTimeField(
+        null=True,
+        blank=True,
+    )
+
+    second_half_stoppage_minutes = models.PositiveSmallIntegerField(
+        default=0,
+    )
+
+    # Snapshot of accumulated pause time when
+    # the second half begins.
+    second_half_pause_baseline_seconds = (
+        models.PositiveIntegerField(default=0)
+    )
+
+
     class Meta:
         ordering = ["scheduled_at"]
 
@@ -213,13 +274,34 @@ class Match(models.Model):
         return f"{self.home_team.name} vs {self.away_team.name}"
 
 
+
+
 class MatchEvent(models.Model):
     class EventType(models.TextChoices):
+        # Existing football events
         GOAL = "goal", "Goal"
         YELLOW_CARD = "yellow_card", "Yellow Card"
         RED_CARD = "red_card", "Red Card"
         PENALTY_KICK = "penalty_kick", "Penalty Kick"
         REWARD = "reward", "Reward"
+
+        # Automatically generated commentary announcements
+        MATCH_STARTED = "match_started", "Match Started"
+        MATCH_PAUSED = "match_paused", "Match Paused"
+        MATCH_RESUMED = "match_resumed", "Match Resumed"
+        EXTRA_TIME = "extra_time", "Extra Time"
+        MATCH_FINISHED = "match_finished", "Match Finished"
+        HALF_TIME = "half_time", "Half Time"
+        SECOND_HALF_STARTED = (
+            "second_half_started",
+            "Second Half Started",
+        )
+        REGULATION_ENDED = (
+            "regulation_ended",
+            "Regulation Ended",
+        )
+
+
 
     match = models.ForeignKey(
         Match,
@@ -231,10 +313,12 @@ class MatchEvent(models.Model):
         Team,
         on_delete=models.PROTECT,
         related_name="match_events",
+        null=True,
+        blank=True,
     )
 
     type = models.CharField(
-        max_length=20,
+        max_length=30,
         choices=EventType.choices,
     )
     

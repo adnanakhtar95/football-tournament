@@ -35,13 +35,20 @@ from .serializers import (
     PlayerSerializer,
     TeamSerializer,
 )
+
 from .services import (
+    end_first_half,
     finish_match,
     get_event_standings,
+    pause_match,
     record_goal,
     record_match_event,
+    resume_match,
+    set_extra_time,
     start_match,
+    start_second_half,
 )
+
 
 
 class StandardPagination(PageNumberPagination):
@@ -284,7 +291,44 @@ class PlayerViewSet(viewsets.ReadOnlyModelViewSet):
                 "minute": goal.minute,
                 "note": goal.note,
             })
+           
+        # All match events linked to this registered player.
+       
+        linked_events = (
+            MatchEvent.objects
+            .filter(player=player)
+            .select_related("match__round__event", "team")
+            .order_by("-created_at", "-id")
+        )
 
+        event_counts = {
+            kind: linked_events.filter(type=kind).count()
+            for kind in (
+                MatchEvent.EventType.GOAL,
+                MatchEvent.EventType.YELLOW_CARD,
+                MatchEvent.EventType.RED_CARD,
+                MatchEvent.EventType.PENALTY_KICK,
+                MatchEvent.EventType.REWARD,
+            )
+        }
+
+        event_history = [
+            {
+                "id": item.id,
+                "match_id": item.match_id,
+                "event_id": item.match.round.event_id,
+                "type": item.type,
+                "minute": item.minute,
+                "points": item.points,
+                "note": item.note,
+                "player_name": item.player_name,
+                "created_at": item.created_at,
+            }
+            for item in linked_events
+        ]
+
+
+          
         return Response({
             "player": PlayerSerializer(player).data,
 
@@ -293,11 +337,30 @@ class PlayerViewSet(viewsets.ReadOnlyModelViewSet):
                 "matches_scored_in": matches_scored_in,
                 "recorded_matches": recorded_matches,
                 "tournaments_scored_in": len(tournaments),
+                "yellow_cards": event_counts[
+                    MatchEvent.EventType.YELLOW_CARD
+                 ],
+                "red_cards": event_counts[
+                    MatchEvent.EventType.RED_CARD
+                ],
+                "penalty_kicks": event_counts[
+                   MatchEvent.EventType.PENALTY_KICK
+                ],
+                "rewards": event_counts[
+                   MatchEvent.EventType.REWARD
+                ],
+               "reward_points": sum(
+                  item.points
+                  for item in linked_events
+                  if item.type == MatchEvent.EventType.REWARD
+                ),
             },
 
             "tournaments": tournaments,
 
             "goal_history": goal_history,
+
+            "event_history": event_history,
         })
 
 class AdminEventViewSet(viewsets.ModelViewSet):
@@ -470,6 +533,62 @@ class MatchViewSet(viewsets.ReadOnlyModelViewSet):
             status=status.HTTP_200_OK,
         )
 
+
+    @action(
+        detail=True,
+        methods=["post"],
+        permission_classes=[IsAdminUser],
+        url_path="half-time",
+    )
+    def half_time(self, request, pk=None):
+        """
+        End the first half and enter Half Time.
+        """
+        try:
+            match = end_first_half(pk)
+
+        except (
+            Match.DoesNotExist,
+            DjangoValidationError,
+        ) as exc:
+            return Response(
+                {"detail": str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return Response(
+            MatchSerializer(match).data,
+            status=status.HTTP_200_OK,
+        )
+
+
+    @action(
+        detail=True,
+        methods=["post"],
+        permission_classes=[IsAdminUser],
+        url_path="second-half",
+    )
+    def second_half(self, request, pk=None):
+        """
+        Start the second half from football minute 45.
+        """
+        try:
+            match = start_second_half(pk)
+
+        except (
+            Match.DoesNotExist,
+            DjangoValidationError,
+        ) as exc:
+            return Response(
+                {"detail": str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return Response(
+            MatchSerializer(match).data,
+            status=status.HTTP_200_OK,
+        )
+
     @action(
         detail=True,
         methods=["post"],
@@ -491,6 +610,82 @@ class MatchViewSet(viewsets.ReadOnlyModelViewSet):
             MatchSerializer(match).data,
             status=status.HTTP_200_OK,
         )
+    
+    @action(
+        detail=True,
+        methods=["post"],
+        permission_classes=[IsAdminUser],
+        url_path="pause",
+    )
+    def pause(self, request, pk=None):
+        try:
+            match = pause_match(pk)
+
+        except (
+            Match.DoesNotExist,
+            DjangoValidationError,
+        ) as exc:
+            return Response(
+                {"detail": str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return Response(
+            MatchSerializer(match).data,
+            status=status.HTTP_200_OK,
+        )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        permission_classes=[IsAdminUser],
+        url_path="resume",
+    )
+    def resume(self, request, pk=None):
+        try:
+            match = resume_match(pk)
+
+        except (
+            Match.DoesNotExist,
+            DjangoValidationError,
+        ) as exc:
+            return Response(
+                {"detail": str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return Response(
+            MatchSerializer(match).data,
+            status=status.HTTP_200_OK,
+        )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        permission_classes=[IsAdminUser],
+        url_path="extra-time",
+    )
+    def extra_time(self, request, pk=None):
+        try:
+            match = set_extra_time(
+                match_id=pk,
+                minutes=request.data.get("minutes"),
+            )
+
+        except (
+            Match.DoesNotExist,
+            DjangoValidationError,
+        ) as exc:
+            return Response(
+                {"detail": str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return Response(
+            MatchSerializer(match).data,
+            status=status.HTTP_200_OK,
+        )
+
 
     @action(
         detail=True,
@@ -558,6 +753,7 @@ class MatchViewSet(viewsets.ReadOnlyModelViewSet):
                     "note",
                     "",
                 ),
+                player_id=request.data.get("player_id"),
             )
         except (
             Match.DoesNotExist,
@@ -586,11 +782,14 @@ class MatchViewSet(viewsets.ReadOnlyModelViewSet):
             pk=pk,
         )
 
+        
         events = (
             MatchEvent.objects
             .filter(match=match)
             .select_related("team", "player__team")
+            .order_by("created_at", "id")
         )
+
 
         return Response(
             MatchEventSerializer(
